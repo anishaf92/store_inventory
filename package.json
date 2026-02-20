@@ -5,5 +5,9 @@
     "scripts": {
         "build": "cd client && npm install && npm run build",
         "start": "cd backend && npm install && npm start"
+    },
+    "dependencies": {
+        "pg": "^8.13.1",
+        "sequelize": "^6.37.5"
     }
 }

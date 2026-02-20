@@ -1,11 +1,12 @@
 const { Sequelize } = require('sequelize');
+const pg = require('pg');
 const config = require('../config/database');
 const env = process.env.NODE_ENV || 'development';
 const list_models = ['User', 'Category', 'Item', 'Request', 'RequestItem', 'InventoryTransaction', 'AuditLog', 'PendingEdit', 'Project'];
 
 const sequelize = config[env].url
-    ? new Sequelize(config[env].url, config[env])
-    : new Sequelize(config[env].database, config[env].username, config[env].password, config[env]);
+    ? new Sequelize(config[env].url, { ...config[env], dialectModule: pg })
+    : new Sequelize(config[env].database, config[env].username, config[env].password, { ...config[env], dialectModule: pg });
 
 
 const db = {};
