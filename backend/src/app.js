@@ -1,7 +1,3 @@
-const dns = require('dns');
-if (dns.setDefaultResultOrder) {
-    dns.setDefaultResultOrder('ipv4first');
-}
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -17,6 +13,7 @@ app.use(morgan('dev'));
 app.use(express.json());
 
 const path = require('path');
+const fs = require('fs');
 
 // Routes
 const authRoutes = require('./routes/authRoutes');
@@ -30,19 +27,21 @@ app.use('/api/requests', requestRoutes);
 app.use('/api/audit', auditRoutes);
 app.use('/api/projects', require('./routes/projectRoutes'));
 
+// Health Check
+app.get('/api/health', (req, res) => {
+    res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
 // Serve Frontend Static Files
 const clientDistPath = path.join(__dirname, '../../client/dist');
 
-if (process.env.NODE_ENV === 'production') {
-    app.use(express.static(clientDistPath));
-} else {
-    // For local dev, maybe the folder doesn't exist yet or is handled by vite proxy
+if (fs.existsSync(clientDistPath)) {
     app.use(express.static(clientDistPath));
 }
 
 // Catch-all middleware for SPA
 app.use((req, res, next) => {
-    if (!req.path.startsWith('/api')) {
+    if (!req.path.startsWith('/api') && fs.existsSync(path.join(clientDistPath, 'index.html'))) {
         res.sendFile(path.join(clientDistPath, 'index.html'));
     } else {
         next();

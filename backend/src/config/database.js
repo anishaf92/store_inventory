@@ -7,6 +7,7 @@ const config = {
     host: process.env.DB_HOST,
     url: process.env.DATABASE_URL,
     dialect: 'postgres',
+    dialectModule: require('pg'),
     logging: false,
 };
 
