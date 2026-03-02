@@ -12,8 +12,8 @@ router.post('/categories', [verifyToken, checkRole(['OWNER', 'STORE_MANAGER', 'S
 router.put('/categories/:id', [verifyToken, checkRole(['OWNER', 'STORE_MANAGER', 'ADMIN'])], controller.updateCategory);
 router.delete('/categories/:id', [verifyToken, checkRole(['OWNER', 'STORE_MANAGER', 'ADMIN'])], controller.deleteCategory);
 
-router.post('/grn', [verifyToken, checkRole(['OWNER', 'STORE_MANAGER', 'STORE_KEEPER'])], controller.processGRN);
-router.post('/issue', [verifyToken, checkRole(['OWNER', 'STORE_MANAGER', 'STORE_KEEPER'])], controller.processIssue);
+router.post('/grn', [verifyToken, checkRole(['OWNER', 'STORE_MANAGER', 'STORE_KEEPER', 'ADMIN'])], controller.processGRN);
+router.post('/issue', [verifyToken, checkRole(['OWNER', 'STORE_MANAGER', 'STORE_KEEPER', 'ADMIN'])], controller.processIssue);
 
 // Edit Permission Routes
 router.put('/items/:id', [verifyToken, checkRole(['OWNER', 'STORE_MANAGER', 'STORE_KEEPER'])], controller.updateItem);

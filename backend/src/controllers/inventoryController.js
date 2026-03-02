@@ -123,8 +123,52 @@ exports.getCategories = async (req, res) => {
 
 exports.processGRN = async (req, res) => {
     try {
-        const { itemId, quantity, invoiceNumber } = req.body;
-        const storeNodeId = req.storeNodeId;
+        const { itemId, quantity, invoiceNumber, store_node_id, storeNodeId: storeNodeIdAlt } = req.body;
+        let storeNodeId = req.storeNodeId || store_node_id || storeNodeIdAlt;
+
+        // If token is stale/missing store mapping, resolve from current user record.
+        if (!storeNodeId && req.userId) {
+            const user = await db.User.findByPk(req.userId, { attributes: ['store_node_id'] });
+            if (user && user.store_node_id) {
+                storeNodeId = user.store_node_id;
+            }
+        }
+
+        // Fallback for global roles/users without token store mapping:
+        // infer store from existing base-store inventory row for the same item.
+        if (!storeNodeId) {
+            const candidates = await db.Inventory.findAll({
+                where: { item_id: itemId, site_location_id: null },
+                attributes: ['store_node_id'],
+                group: ['store_node_id']
+            });
+
+            if (candidates.length === 1) {
+                storeNodeId = candidates[0].store_node_id;
+            } else if (candidates.length > 1) {
+                return res.status(400).send({ message: "Multiple stores found for item. Assign a store to user before GRN." });
+            }
+        }
+
+        // Keeper fallback: infer from their latest request with a store mapping.
+        if (!storeNodeId && req.userRole === 'STORE_KEEPER') {
+            const latestRequest = await db.Request.findOne({
+                where: { requester_id: req.userId },
+                attributes: ['store_node_id'],
+                order: [['createdAt', 'DESC']]
+            });
+            if (latestRequest && latestRequest.store_node_id) {
+                storeNodeId = latestRequest.store_node_id;
+            }
+        }
+
+        // Final safe fallback: if system has exactly one store, use it.
+        if (!storeNodeId) {
+            const allStores = await db.StoreNode.findAll({ attributes: ['id'] });
+            if (allStores.length === 1) {
+                storeNodeId = allStores[0].id;
+            }
+        }
 
         if (!storeNodeId) return res.status(403).send({ message: "Store assignment required for GRN" });
 

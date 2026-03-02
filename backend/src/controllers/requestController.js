@@ -155,20 +155,23 @@ exports.fulfillRequestItem = async (req, res) => {
 
         if (action === 'ISSUE') {
             const qtyToIssue = requestItem.quantity - requestItem.issued_quantity;
+            if (qtyToIssue <= 0) {
+                return res.status(400).send({ message: "Item is already fully processed." });
+            }
 
             // Check Stock (Only if it's a real item)
             if (requestItem.item_id) {
                 const storeNodeId = requestItem.Request.store_node_id || req.storeNodeId;
                 const currentStock = await inventoryService.getStockForStore(storeNodeId, requestItem.item_id);
 
-                // If it's a PR (Purchase Requisition), we assume it's arriving from vendor
-                // so we auto-receive it into stock BEFORE issuing.
+                // For PR flow, keeper confirms receipt and issue in one action.
+                // This does NOT run on manager approval; it only runs when fulfill action is called.
                 if (requestItem.Request.type === 'PR' && requestItem.issued_quantity === 0) {
                     await inventoryService.processGRN(
                         storeNodeId,
                         requestItem.item_id,
                         qtyToIssue,
-                        `AUTO-RECV-${requestItem.Request.id.slice(0, 8)}`,
+                        `RECV-${requestItem.Request.id.slice(0, 8)}`,
                         req.userId
                     );
                 } else if (currentStock < qtyToIssue) {
@@ -224,11 +227,14 @@ exports.fulfillRequestItem = async (req, res) => {
 
         } else if (action === 'RECEIVE') {
             const qtyToReceive = requestItem.quantity - requestItem.issued_quantity;
+            if (qtyToReceive <= 0) {
+                return res.status(400).send({ message: "Item is already fully received." });
+            }
             if (!requestItem.item_id) {
                 return res.status(400).send({ message: "Cannot receive custom item. Convert to inventory first." });
             }
 
-            const storeNodeId = requestItem.Request.store_node_id;
+            const storeNodeId = requestItem.Request.store_node_id || req.storeNodeId;
             if (!storeNodeId) {
                 return res.status(400).send({ message: "Store Node ID is missing." });
             }

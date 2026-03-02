@@ -161,17 +161,20 @@ const Inventory = () => {
 
     const onGRNSubmit = async (data) => {
         try {
+            const loggedUser = JSON.parse(localStorage.getItem('user') || 'null');
             await api.post('/inventory/grn', {
                 itemId: grnItem.id,
                 quantity: parseInt(data.quantity),
-                invoiceNumber: data.referenceId // Renamed parameter to align with backend changes
+                invoiceNumber: data.referenceId, // Renamed parameter to align with backend changes
+                store_node_id: grnItem?.Inventories?.[0]?.store_node_id || loggedUser?.store_node_id || null
             });
             alert('Stock updated successfully');
             setShowGRNModal(false);
             fetchItems();
         } catch (err) {
             console.error(err);
-            alert('Failed to update stock');
+            const msg = err.response?.data?.message || 'Failed to update stock';
+            alert(`Failed to update stock: ${msg}`);
         }
     };
 
