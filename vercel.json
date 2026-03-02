@@ -19,8 +19,8 @@
             "destination": "backend/src/app.js"
         },
         {
-            "source": "/static/(.*)",
-            "destination": "/client/dist/static/$1"
+            "source": "/assets/(.*)",
+            "destination": "/client/dist/assets/$1"
         },
         {
             "source": "/(.*)",
