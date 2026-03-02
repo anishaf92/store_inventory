@@ -1,7 +1,9 @@
 import axios from 'axios';
 
 const api = axios.create({
-    baseURL: '/api',
+    // In Vercel, set VITE_API_BASE_URL to your backend URL (e.g. https://backend.example.com/api)
+    // Locally it falls back to the Vite proxy /api.
+    baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
 });
 
 api.interceptors.request.use(

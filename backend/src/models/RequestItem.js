@@ -55,6 +55,14 @@ module.exports = (sequelize) => {
             allowNull: true,
             defaultValue: {},
         },
+        bill_number: {
+            type: DataTypes.STRING,
+            allowNull: true,
+        },
+        amount: {
+            type: DataTypes.DECIMAL(12, 2),
+            allowNull: true,
+        },
     }, {
         tableName: 'request_items',
         timestamps: false,

@@ -110,6 +110,38 @@ const Dashboard = () => {
                 )}
             </div>
 
+            {user.role === 'OWNER' && stats.projectSpend && stats.projectSpend.length > 0 && (
+                <div className="bg-white rounded-lg shadow-md p-6 mb-8">
+                    <h2 className="text-xl font-bold text-gray-800 mb-4">Project Spend Summary</h2>
+                    <div className="space-y-3">
+                        {stats.projectSpend.map((p) => (
+                            <div
+                                key={p.id}
+                                className="flex items-center justify-between border-b last:border-0 pb-3 last:pb-0"
+                            >
+                                <div>
+                                    <p className="font-semibold text-gray-800">
+                                        {p.reference_number || 'Unlabelled Project'}
+                                    </p>
+                                    <p className="text-xs text-gray-500">{p.location || 'No location set'}</p>
+                                </div>
+                                <div className="text-right">
+                                    <p className="text-lg font-black text-emerald-700">
+                                        {Number(p.total_amount || 0).toLocaleString(undefined, {
+                                            minimumFractionDigits: 2,
+                                            maximumFractionDigits: 2
+                                        })}
+                                    </p>
+                                    <p className="text-[10px] text-gray-400 uppercase tracking-widest">
+                                        Total Approved Amount
+                                    </p>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+
             <div className="bg-white rounded-lg shadow-md p-6">
                 <h2 className="text-xl font-bold text-gray-800 mb-4">Recent Activity</h2>
                 <div className="space-y-4">

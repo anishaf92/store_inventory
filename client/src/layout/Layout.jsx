@@ -17,10 +17,12 @@ const Layout = ({ children }) => {
         { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard, roles: ['ADMIN', 'OWNER', 'STORE_MANAGER', 'STORE_KEEPER', 'PROJECT_MANAGER'] },
         { name: 'Inventory', path: '/inventory', icon: Box, roles: ['ADMIN', 'OWNER', 'STORE_MANAGER', 'STORE_KEEPER'] },
         { name: 'Transfers', path: '/transfers', icon: Truck, roles: ['ADMIN', 'OWNER', 'STORE_MANAGER', 'STORE_KEEPER', 'PROJECT_MANAGER'] },
-        { name: 'Projects', path: '/projects', icon: FileText, roles: ['ADMIN', 'OWNER', 'PROJECT_MANAGER'] },
+        // For PM, show "Sites" instead of "Projects" in sidebar (same route)
+        { name: user?.role === 'PROJECT_MANAGER' ? 'Sites' : 'Projects', path: '/projects', icon: FileText, roles: ['ADMIN', 'OWNER', 'PROJECT_MANAGER'] },
         { name: 'Requests', path: '/requests', icon: FileText, roles: ['ADMIN', 'OWNER', 'STORE_MANAGER', 'STORE_KEEPER', 'PROJECT_MANAGER'] },
         { name: 'Audit Logs', path: '/audit', icon: ShieldCheck, roles: ['ADMIN', 'OWNER', 'STORE_MANAGER'] },
-        { name: 'Admin', path: '/admin', icon: Settings, roles: ['ADMIN'] },
+        { name: 'Categories', path: '/categories', icon: FileText, roles: ['ADMIN', 'OWNER', 'STORE_MANAGER'] },
+        { name: 'Manage Users', path: '/admin', icon: Settings, roles: ['ADMIN'] },
     ];
 
     return (

@@ -290,13 +290,19 @@ exports.getDashboardStats = async (req, res) => {
         const role = user.role;
 
         const stats = {};
-        const storeNodeId = user.store_node_id;
+        // For OWNER we always show global stats, ignoring any store_node_id on the user.
+        const storeNodeId = role === 'OWNER' ? null : user.store_node_id;
 
         if (role === 'PROJECT_MANAGER') {
-            stats.totalProjects = await db.Project.count();
+            // Only count projects where this user is the assigned project manager
+            stats.totalProjects = await db.Project.count({
+                where: { project_manager_id: req.userId }
+            });
+            // Only this PM's own requests
             stats.myRequests = await db.Request.count({
                 where: { requester_id: req.userId }
             });
+            // Pending requests created by this PM
             stats.pendingApprovals = await db.Request.count({
                 where: { requester_id: req.userId, status: 'PENDING' }
             });
@@ -340,6 +346,26 @@ exports.getDashboardStats = async (req, res) => {
                 having: db.sequelize.literal(`SUM("Inventories"."current_stock") < "Item"."low_stock_threshold"`)
             });
             stats.lowStock = lowStockItems.length;
+
+            // Owner dashboard: total approved amount per project (from PR / PR_STORE items)
+            if (role === 'OWNER') {
+                const [rows] = await db.sequelize.query(`
+                    SELECT
+                        p.id,
+                        p.reference_number,
+                        p."location",
+                        COALESCE(SUM(ri.amount), 0) AS total_amount
+                    FROM projects p
+                    LEFT JOIN requests r
+                        ON r.project_id = p.id
+                        AND r.type IN ('PR', 'PR_STORE')
+                    LEFT JOIN request_items ri
+                        ON ri.request_id = r.id
+                    GROUP BY p.id, p.reference_number, p."location"
+                    ORDER BY p."createdAt" DESC
+                `);
+                stats.projectSpend = rows;
+            }
         }
 
         const activityWhere = storeNodeId ? { store_node_id: storeNodeId } : {};

@@ -7,6 +7,7 @@ router.post('/', [verifyToken], controller.createRequest);
 router.get('/', [verifyToken], controller.getRequests);
 // Only managers/owners/admin can approve or change product request status
 router.put('/:id/status', [verifyToken, checkRole(['OWNER', 'STORE_MANAGER', 'ADMIN'])], controller.updateStatus);
+router.put('/:id/approve-with-bills', [verifyToken, checkRole(['OWNER', 'STORE_MANAGER', 'ADMIN'])], controller.approveWithBills);
 router.put('/items/:id/fulfill', [verifyToken, checkRole(['OWNER', 'STORE_MANAGER', 'STORE_KEEPER', 'PROJECT_MANAGER'])], controller.fulfillRequestItem);
 
 // Helper endpoints for scoped stores/sites and PM site creation

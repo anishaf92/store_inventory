@@ -19,12 +19,20 @@ const Requests = () => {
     const [itemToConvert, setItemToConvert] = useState(null);
     const [distributionData, setDistributionData] = useState(null);
     const [showDistributionModal, setShowDistributionModal] = useState(false);
+    const [distributionContext, setDistributionContext] = useState(null); // item/request context for allot
+    const [showApproveModal, setShowApproveModal] = useState(false);
+    const [approvingRequest, setApprovingRequest] = useState(null);
+    const [approveBills, setApproveBills] = useState({});
 
     const { register, control, handleSubmit, reset, watch, formState: { errors } } = useForm({
         defaultValues: { items: [{ item_id: '', quantity: 1, custom_item_name: '' }] }
     });
     const { fields, append, remove } = useFieldArray({ control, name: "items" });
     const watchedItems = watch('items') || [];
+    const watchedProjectId = watch('project_id');
+    const filteredSites = user?.role === 'PROJECT_MANAGER'
+        ? sites.filter(s => !watchedProjectId || s.project_id === watchedProjectId)
+        : sites;
 
     useEffect(() => {
         fetchRequests();
@@ -62,6 +70,43 @@ const Requests = () => {
         }
     };
 
+    const handleQuickAddCategory = async () => {
+        // Only allow elevated roles to create categories from here
+        if (!user || !['OWNER', 'STORE_MANAGER', 'ADMIN'].includes(user.role)) {
+            alert('Only Owner / Store Manager / Admin can create new categories.');
+            return;
+        }
+
+        const name = window.prompt('Enter new category name (e.g. CABLES, TOOLS)');
+        if (!name) return;
+        const description = window.prompt('Enter short description (optional)');
+        const specRaw = window.prompt('Enter spec fields (comma separated, e.g. Size, Colour, Material) or leave blank');
+
+        const fields = (specRaw || '')
+            .split(',')
+            .map(s => s.trim())
+            .filter(Boolean)
+            .map(label => ({
+                key: label.toLowerCase().replace(/[^a-z0-9]/g, '_'),
+                label,
+                type: 'string'
+            }));
+
+        const payload = {
+            name,
+            description: description || '',
+            specification_schema: fields.length ? { fields } : { fields: [] }
+        };
+
+        try {
+            await api.post('/inventory/categories', payload);
+            await fetchCategories();
+            alert('Category created.');
+        } catch (err) {
+            alert(err.response?.data?.message || 'Failed to create category');
+        }
+    };
+
     const fetchProjects = async () => {
         try {
             const res = await api.get('/projects');
@@ -89,13 +134,53 @@ const Requests = () => {
         }
     };
 
-    const fetchDistribution = async (itemId) => {
+    const fetchDistribution = async (itemId, context = null) => {
         try {
             const res = await api.get(`/inventory/items/${itemId}/distribution`);
             setDistributionData(res.data);
+            setDistributionContext(context);
             setShowDistributionModal(true);
         } catch (err) {
             alert('Failed to fetch stock distribution');
+        }
+    };
+
+    const handleAllotFromDistribution = async (row) => {
+        if (user.role !== 'STORE_KEEPER') return;
+        if (!distributionContext || !distributionContext.itemId) return;
+        if (!row.site?.id) {
+            alert('Cannot allot to a store-level row. Please select a specific site.');
+            return;
+        }
+
+        const maxQty = row.current_stock || 0;
+        if (maxQty <= 0) {
+            alert('No available stock to allot from this site.');
+            return;
+        }
+
+        const input = window.prompt(`Enter quantity to allot (max ${maxQty}):`, String(Math.min(1, maxQty)));
+        if (!input) return;
+        const qty = parseInt(input, 10);
+        if (!qty || qty <= 0 || qty > maxQty) {
+            alert(`Please enter a number between 1 and ${maxQty}.`);
+            return;
+        }
+
+        try {
+            await api.post('/transfers', {
+                site_location_id: row.site.id,
+                item_id: distributionContext.itemId,
+                quantity: qty,
+                notes: distributionContext.requestId
+                    ? `Allotment from distribution for request ${distributionContext.requestId.slice(0, 8)}`
+                    : 'Allotment from distribution',
+                request_id: distributionContext.requestId || null
+            });
+            alert('Transfer created. Check the Transfers tab to complete and move stock.');
+            setShowDistributionModal(false);
+        } catch (err) {
+            alert(err.response?.data?.message || 'Failed to create transfer');
         }
     };
 
@@ -137,6 +222,36 @@ const Requests = () => {
         }
     };
 
+    const openApproveModal = (req) => {
+        setApprovingRequest(req);
+        const initial = {};
+        (req.RequestItems || []).forEach((ri) => {
+            initial[ri.id] = {
+                bill_number: ri.bill_number || '',
+                amount: ri.amount || ''
+            };
+        });
+        setApproveBills(initial);
+        setShowApproveModal(true);
+    };
+
+    const handleApproveWithBills = async () => {
+        if (!approvingRequest) return;
+        try {
+            const payloadItems = Object.entries(approveBills).map(([id, v]) => ({
+                id,
+                bill_number: v.bill_number || null,
+                amount: v.amount ? parseFloat(v.amount) : null
+            }));
+            await api.put(`/requests/${approvingRequest.id}/approve-with-bills`, { items: payloadItems });
+            setShowApproveModal(false);
+            setApprovingRequest(null);
+            await fetchRequests();
+        } catch (err) {
+            alert(err.response?.data?.message || 'Failed to approve with billing details');
+        }
+    };
+
     const getStatusIcon = (status) => {
         switch (status) {
             case 'FULFILLED': return <CheckCircle className="w-5 h-5 text-emerald-600" />;
@@ -159,6 +274,7 @@ const Requests = () => {
             case 'REJECTED': return 'Rejected';
             case 'PENDING': return 'Requested';
             case 'IN_PROGRESS': return 'In Progress';
+            case 'COMPLETED': return 'Utilized';
             default: return status;
         }
     };
@@ -202,8 +318,15 @@ const Requests = () => {
 
     return (
         <div>
-            <div className="flex justify-between items-center mb-6">
-                <h1 className="text-2xl font-bold text-gray-800">Requisitions (MR)</h1>
+            <div className="flex justify-between items-center mb-2">
+                <div>
+                    <h1 className="text-2xl font-bold text-gray-800">Requisitions (MR)</h1>
+                    {user.role === 'PROJECT_MANAGER' && projects.length > 0 && (
+                        <p className="text-sm text-gray-500 mt-1">
+                            Project: <span className="font-semibold">{projects[0].reference_number}</span> – {projects[0].location}
+                        </p>
+                    )}
+                </div>
                 {(user.role === 'PROJECT_MANAGER' || user.role === 'STORE_KEEPER') && (
                     <button
                         onClick={() => setShowModal(true)}
@@ -267,8 +390,18 @@ const Requests = () => {
                                         {(user.role === 'OWNER' || user.role === 'STORE_MANAGER') &&
                                             (req.type === 'PR' || req.type === 'PR_STORE') && req.status === 'PENDING' && (
                                                 <div className="space-x-2">
-                                                    <button onClick={() => updateStatus(req.id, 'APPROVED')} className="text-green-600 hover:text-green-900 font-medium">Approve</button>
-                                                    <button onClick={() => updateStatus(req.id, 'REJECTED')} className="text-red-600 hover:text-red-900 font-medium">Reject</button>
+                                                    <button
+                                                        onClick={() => openApproveModal(req)}
+                                                        className="text-green-600 hover:text-green-900 font-medium"
+                                                    >
+                                                        Approve
+                                                    </button>
+                                                    <button
+                                                        onClick={() => updateStatus(req.id, 'REJECTED')}
+                                                        className="text-red-600 hover:text-red-900 font-medium"
+                                                    >
+                                                        Reject
+                                                    </button>
                                                 </div>
                                             )}
 
@@ -284,7 +417,7 @@ const Requests = () => {
                                                     {req.type === 'MR' && (req.status === 'REQUESTED' || req.status === 'APPROVED' || req.status === 'PARTIALLY_FULFILLED' || req.status === 'PENDING' || req.status === 'FULFILLED') && (
                                                         <button onClick={() => openManageModal(req)} className="text-blue-600 hover:text-blue-900 font-medium">{req.status === 'FULFILLED' ? 'View' : 'Manage'}</button>
                                                     )}
-                                                    {req.type === 'PR' && (
+                                                    {(req.type === 'PR' || req.type === 'PR_STORE') && (
                                                         <button onClick={() => openManageModal(req)} className="text-blue-600 hover:text-blue-900 font-medium">{req.status === 'FULFILLED' ? 'View' : 'Manage'}</button>
                                                     )}
                                                 </>
@@ -371,28 +504,31 @@ const Requests = () => {
                                                     <span className={`font-bold ${item.Item?.current_stock < (item.quantity - item.issued_quantity) ? 'text-red-500' : 'text-green-600'}`}>
                                                         {item.Item?.current_stock}
                                                     </span>
-                                                    <button
-                                                        onClick={() => fetchDistribution(item.item_id)}
-                                                        className="text-[9px] text-blue-500 font-bold hover:underline mt-1"
-                                                    >
-                                                        Check Other Sites
-                                                    </button>
+                                                    {user.role !== 'PROJECT_MANAGER' && (
+                                                        <button
+                                                            onClick={() => fetchDistribution(item.item_id, { itemId: item.item_id, requestId: selectedRequest.id })}
+                                                            className="text-[9px] text-blue-500 font-bold hover:underline mt-1"
+                                                        >
+                                                            Check Other Sites
+                                                        </button>
+                                                    )}
                                                 </div>
                                             ) : 'N/A'}
                                         </td>
                                         <td className="px-4 py-3 text-sm text-center border-r">
                                             <span className={`px-2 py-0.5 text-[10px] font-bold rounded-full border ${item.status === 'ISSUED' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
                                                 item.status === 'NEEDS_PROCUREMENT' ? 'bg-amber-50 text-amber-700 border-amber-200' :
+                                                    item.status === 'COMPLETED' ? 'bg-gray-50 text-gray-700 border-gray-200' :
                                                     'bg-blue-50 text-blue-700 border-blue-200'
                                                 }`}>
-                                                {item.status}
+                                                {item.status === 'COMPLETED' ? 'UTILIZED' : item.status}
                                             </span>
                                         </td>
                                         <td className="px-4 py-3 text-sm space-x-2">
                                             {item.status !== 'ISSUED' && (
                                                 <>
-                                                    {/* ===== MR ACTIONS ===== */}
-                                                    {(user.role === 'STORE_KEEPER' || user.role === 'OWNER' || user.role === 'STORE_MANAGER' || user.role === 'PROJECT_MANAGER') && selectedRequest.type === 'MR' && (() => {
+                                                    {/* ===== MR ACTIONS (Keeper/Manager only — PM cannot issue/raise PR) ===== */}
+                                                    {(user.role === 'STORE_KEEPER' || user.role === 'OWNER' || user.role === 'STORE_MANAGER') && selectedRequest.type === 'MR' && (() => {
                                                         const stock = item.Item?.current_stock ?? 0;
                                                         const needed = item.quantity - item.issued_quantity;
                                                         return (
@@ -455,7 +591,15 @@ const Requests = () => {
                                                     {/* Store Keeper: Confirm Receipt for PR (Issue to site) or PR_STORE (Add to store stock) */}
                                                     {user.role === 'STORE_KEEPER' && (selectedRequest.type === 'PR' || selectedRequest.type === 'PR_STORE') && item.item_id && (
                                                         <button
-                                                            onClick={() => handleFulfillItem(item.id, selectedRequest.type === 'PR' ? 'ISSUE' : 'RECEIVE')}
+                                                            onClick={() => {
+                                                                const invoice = window.prompt('Enter supplier invoice number');
+                                                                if (!invoice) return;
+                                                                handleFulfillItem(
+                                                                    item.id,
+                                                                    selectedRequest.type === 'PR' ? 'ISSUE' : 'RECEIVE',
+                                                                    { invoice_number: invoice }
+                                                                );
+                                                            }}
                                                             className="text-xs px-2 py-1 rounded-lg border font-bold bg-emerald-600 text-white border-emerald-700 hover:bg-emerald-700 shadow-md"
                                                         >
                                                             {selectedRequest.type === 'PR' ? 'Confirm Receipt & Issue' : 'Confirm Receipt & Add to Stock'}
@@ -509,26 +653,7 @@ const Requests = () => {
                                     <input type="date" {...register('required_date', { required: true })} className="border p-2 rounded-lg w-full bg-gray-50" />
                                 </div>
 
-                                {user.role === 'PROJECT_MANAGER' && (
-                                    <div className="col-span-2">
-                                        <div className="flex justify-between items-center">
-                                            <label className="block text-sm font-bold text-gray-700">
-                                                Destination Site <span className="text-red-500">*</span>
-                                            </label>
-                                            <button
-                                                type="button"
-                                                onClick={handleAddSite}
-                                                className="text-xs font-bold text-blue-600 hover:underline"
-                                            >
-                                                + Add New Site
-                                            </button>
-                                        </div>
-                                        <select {...register('site_location_id', { required: true })} className="border p-2 rounded-lg w-full bg-gray-50 mt-1">
-                                            <option value="">Select Project Site</option>
-                                            {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                                        </select>
-                                    </div>
-                                )}
+                                {/* PROJECT_MANAGER no longer selects site when raising MR */}
 
                                 {user.role === 'STORE_KEEPER' && (
                                     <>
@@ -549,7 +674,7 @@ const Requests = () => {
                                             <label className="block text-sm font-bold text-gray-700">Destination Site (If Transfer)</label>
                                             <select {...register('site_location_id')} className="border p-2 rounded-lg w-full bg-gray-50">
                                                 <option value="">-- None --</option>
-                                                {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                                                {filteredSites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                                             </select>
                                         </div>
                                     </>
@@ -629,7 +754,18 @@ const Requests = () => {
                                         </div>
                                         {!watchedItems[index]?.item_id && (
                                             <div>
-                                                <label className="block text-[10px] font-extrabold text-gray-400 uppercase tracking-widest mb-1">3. Item Category</label>
+                                                <div className="flex justify-between items-center mb-1">
+                                                    <label className="block text-[10px] font-extrabold text-gray-400 uppercase tracking-widest">3. Item Category</label>
+                                                    {user && ['OWNER', 'STORE_MANAGER', 'ADMIN'].includes(user.role) && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={handleQuickAddCategory}
+                                                            className="text-[9px] font-bold text-blue-600 hover:underline"
+                                                        >
+                                                            + New Category
+                                                        </button>
+                                                    )}
+                                                </div>
                                                 <select
                                                     {...register(`items.${index}.category_id`, { required: !field.item_id })}
                                                     className="border p-2.5 rounded-xl w-full bg-white text-sm font-bold focus:ring-2 focus:ring-safety-orange outline-none shadow-inner"
@@ -777,6 +913,111 @@ const Requests = () => {
                     </div>
                 )
             }
+            {/* Approve with Bills Modal */}
+            {showApproveModal && approvingRequest && (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-[80]">
+                    <div className="bg-white rounded-2xl p-8 w-full max-w-2xl shadow-2xl border border-gray-100 max-h-[90vh] overflow-y-auto">
+                        <div className="flex justify-between items-start mb-4">
+                            <div>
+                                <h2 className="text-xl font-black text-gray-900">
+                                    Approve Request {approvingRequest.id.slice(0, 8)}...
+                                </h2>
+                                <p className="text-xs text-gray-500 mt-1">
+                                    Enter bill number and amount for each line item before approval.
+                                </p>
+                            </div>
+                            <button
+                                onClick={() => {
+                                    setShowApproveModal(false);
+                                    setApprovingRequest(null);
+                                }}
+                                className="text-gray-400 hover:text-gray-600"
+                            >
+                                <XCircle className="w-5 h-5" />
+                            </button>
+                        </div>
+
+                        <div className="space-y-4">
+                            {approvingRequest.RequestItems?.map((ri) => (
+                                <div
+                                    key={ri.id}
+                                    className="p-4 border border-gray-100 rounded-2xl bg-gray-50/60 flex flex-col md:flex-row md:items-center md:justify-between gap-3"
+                                >
+                                    <div>
+                                        <div className="font-bold text-gray-900 text-sm">
+                                            {ri.Item?.name || ri.custom_item_name}
+                                        </div>
+                                        <div className="text-[10px] text-gray-500 uppercase tracking-tighter">
+                                            Qty: {ri.quantity} {ri.Item?.unit || 'pcs'}
+                                        </div>
+                                    </div>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 w-full md:w-1/2">
+                                        <div>
+                                            <label className="block text-[9px] font-bold text-gray-500 uppercase mb-1">
+                                                Bill No.
+                                            </label>
+                                            <input
+                                                type="text"
+                                                className="border border-gray-200 rounded-xl px-3 py-2 text-sm w-full bg-white"
+                                                value={approveBills[ri.id]?.bill_number || ''}
+                                                onChange={(e) =>
+                                                    setApproveBills((prev) => ({
+                                                        ...prev,
+                                                        [ri.id]: {
+                                                            ...(prev[ri.id] || {}),
+                                                            bill_number: e.target.value
+                                                        }
+                                                    }))
+                                                }
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-[9px] font-bold text-gray-500 uppercase mb-1">
+                                                Amount
+                                            </label>
+                                            <input
+                                                type="number"
+                                                step="0.01"
+                                                className="border border-gray-200 rounded-xl px-3 py-2 text-sm w-full bg-white"
+                                                value={approveBills[ri.id]?.amount || ''}
+                                                onChange={(e) =>
+                                                    setApproveBills((prev) => ({
+                                                        ...prev,
+                                                        [ri.id]: {
+                                                            ...(prev[ri.id] || {}),
+                                                            amount: e.target.value
+                                                        }
+                                                    }))
+                                                }
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+
+                        <div className="mt-6 flex justify-end space-x-3">
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setShowApproveModal(false);
+                                    setApprovingRequest(null);
+                                }}
+                                className="px-6 py-2.5 text-sm font-bold text-gray-500 hover:bg-gray-50 rounded-xl"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleApproveWithBills}
+                                className="px-8 py-2.5 bg-emerald-600 text-white font-bold rounded-xl shadow-lg shadow-emerald-100 hover:bg-emerald-700 transform transition-all active:scale-95"
+                            >
+                                Approve & Save Bills
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
             {/* Distribution Modal */}
             {showDistributionModal && distributionData && (
                 <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-[70]">
@@ -788,14 +1029,24 @@ const Requests = () => {
                         <div className="space-y-3">
                             {distributionData.length === 0 && <p className="text-center text-sm text-gray-500 italic">No stock found in any store.</p>}
                             {distributionData.map((d, i) => (
-                                <div key={i} className="flex justify-between p-3 bg-gray-50 rounded-xl border border-gray-100">
+                                <div key={i} className="flex justify-between items-center p-3 bg-gray-50 rounded-xl border border-gray-100">
                                     <div>
                                         <div className="font-bold text-sm text-gray-800">{d.store?.name || 'Unknown Store'}</div>
                                         <div className="text-[10px] text-gray-500 font-mono uppercase">{d.site?.name || 'Main Warehouse'}</div>
                                     </div>
-                                    <div className="text-right">
-                                        <div className="text-lg font-black text-gray-900">{d.current_stock}</div>
-                                        <div className="text-[10px] text-gray-400 font-bold uppercase">Available</div>
+                                    <div className="flex items-center space-x-3">
+                                        <div className="text-right">
+                                            <div className="text-lg font-black text-gray-900">{d.current_stock}</div>
+                                            <div className="text-[10px] text-gray-400 font-bold uppercase">Available</div>
+                                        </div>
+                                        {user.role === 'STORE_KEEPER' && d.site?.id && d.current_stock > 0 && (
+                                            <button
+                                                onClick={() => handleAllotFromDistribution(d)}
+                                                className="text-[10px] px-3 py-1 rounded-lg border font-bold bg-emerald-600 text-white border-emerald-700 hover:bg-emerald-700 shadow-sm uppercase tracking-widest"
+                                            >
+                                                Allot
+                                            </button>
+                                        )}
                                     </div>
                                 </div>
                             ))}

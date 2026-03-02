@@ -11,6 +11,7 @@ import Projects from './pages/Projects';
 import AuditLogs from './pages/AuditLogs';
 import Transfers from './pages/Transfers';
 import Admin from './pages/Admin';
+import Categories from './pages/Categories';
 
 function App() {
   return (
@@ -25,6 +26,13 @@ function App() {
             <ProtectedRoute>
               <Layout>
                 <Dashboard />
+              </Layout>
+            </ProtectedRoute>
+          } />
+          <Route path="/categories" element={
+            <ProtectedRoute>
+              <Layout>
+                <Categories />
               </Layout>
             </ProtectedRoute>
           } />

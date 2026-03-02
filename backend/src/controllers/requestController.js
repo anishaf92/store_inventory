@@ -34,7 +34,8 @@ exports.createRequest = async (req, res) => {
         let resolvedStoreId = ['PR_STORE', 'TRANSFER_REQUEST'].includes(type)
             ? (store_node_id || user.store_node_id)
             : store_node_id;
-        const resolvedSiteId = ['MR', 'PR', 'TRANSFER_REQUEST'].includes(type) ? site_location_id : null;
+        // MR can now be raised without a site; PR and TRANSFER still require one.
+        const resolvedSiteId = ['PR', 'TRANSFER_REQUEST'].includes(type) ? site_location_id : null;
 
         // Project-centric store resolution for MR / PR:
         // If a project is selected and we don't yet know the store, create/link a dedicated StoreNode based on the project's ProjectStore.
@@ -99,7 +100,8 @@ exports.createRequest = async (req, res) => {
         if (!storeExists) {
             return res.status(400).send({ message: "Selected store is invalid. Please choose a valid store." });
         }
-        if (['MR', 'PR', 'TRANSFER_REQUEST'].includes(type) && !resolvedSiteId) {
+        // Only PR and TRANSFER_REQUEST require a site; MR can be project-level without a specific site.
+        if (['PR', 'TRANSFER_REQUEST'].includes(type) && !resolvedSiteId) {
             return res.status(400).send({ message: "Site Location ID is required for this request type." });
         }
 
@@ -224,6 +226,59 @@ exports.updateStatus = async (req, res) => {
 
         await request.update({ status: finalStatus });
         res.send({ message: `Request status updated to ${finalStatus}`, request });
+    } catch (err) {
+        res.status(500).send({ message: err.message });
+    }
+};
+
+// Manager/Owner approval with per-item billing details
+exports.approveWithBills = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { items } = req.body; // [{ id, bill_number, amount }]
+
+        const request = await Request.findByPk(id, {
+            include: [RequestItem]
+        });
+
+        if (!request) {
+            return res.status(404).send({ message: "Request not found" });
+        }
+
+        if (!(request.type === 'PR' || request.type === 'PR_STORE')) {
+            return res.status(400).send({ message: "Billing approval is only applicable for PR / PR_STORE requests." });
+        }
+
+        if (request.status !== 'PENDING') {
+            return res.status(400).send({ message: "Only pending requests can be approved." });
+        }
+
+        if (!items || !Array.isArray(items) || items.length === 0) {
+            return res.status(400).send({ message: "Billing details for items are required." });
+        }
+
+        const itemMap = new Map();
+        items.forEach((i) => {
+            if (i.id) {
+                itemMap.set(i.id, i);
+            }
+        });
+
+        const requestItems = request.RequestItems || [];
+        for (const ri of requestItems) {
+            const payload = itemMap.get(ri.id);
+            if (payload) {
+                await ri.update({
+                    bill_number: payload.bill_number || null,
+                    amount: payload.amount != null ? payload.amount : null,
+                });
+            }
+        }
+
+        // Mirror the semantics of updateStatus APPROVED for PR/PR_STORE -> IN_PROGRESS
+        await request.update({ status: 'IN_PROGRESS' });
+
+        res.send({ message: "Request approved with billing details", request });
     } catch (err) {
         res.status(500).send({ message: err.message });
     }

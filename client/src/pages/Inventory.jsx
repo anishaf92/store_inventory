@@ -1,9 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useContext } from 'react';
 import { useForm, useFieldArray } from 'react-hook-form';
 import api from '../services/api';
 import { Plus, Search, Tag, Package, X } from 'lucide-react';
+import { AuthContext } from '../context/AuthContext';
 
 const Inventory = () => {
+    const { user } = useContext(AuthContext);
     const [items, setItems] = useState([]);
     const [categories, setCategories] = useState([]); // Fetch for dropdown
     const [showItemModal, setShowItemModal] = useState(false);
@@ -232,21 +234,32 @@ const Inventory = () => {
                                 <td className="px-6 py-4 whitespace-nowrap">
                                     <div className="flex flex-col">
                                         {(() => {
-                                            // Extract stock from nested Inventories array
-                                            const stock = item.Inventories && item.Inventories.length > 0 ? item.Inventories[0].current_stock : 0;
+                                            // For store-scoped roles, backend already filters by their store.
+                                            // For Admin/Owner with no store, this aggregates all stores/sites for the item.
+                                            const inventories = item.Inventories || [];
+                                            const totalStock = inventories.reduce((sum, inv) => sum + (inv.current_stock || 0), 0);
                                             const threshold = item.low_stock_threshold || 0;
-                                            const isLow = stock < threshold;
+                                            const isLow = totalStock < threshold;
+                                            const locationsCount = inventories.length;
 
                                             return (
                                                 <>
                                                     <span className={`px-2 inline-flex text-[10px] leading-4 font-bold rounded-t border-x border-t ${isLow ? 'bg-red-50 text-red-600 border-red-200' : 'bg-green-50 text-green-600 border-green-200'}`}>
-                                                        CURRENT STOCK
+                                                        {user?.role === 'ADMIN' || user?.role === 'OWNER' ? 'OVERALL STOCK' : 'CURRENT STOCK'}
                                                     </span>
                                                     <span className={`px-2 py-1 inline-flex text-xs leading-5 font-bold rounded-b border-x border-b ${isLow ? 'bg-red-100 text-red-800 border-red-200' : 'bg-green-100 text-green-800 border-green-200'}`}>
-                                                        {stock} <span className="ml-1 text-[10px] opacity-70 underline decoration-dotted">{item.unit || 'units'}</span>
+                                                        {totalStock}{' '}
+                                                        <span className="ml-1 text-[10px] opacity-70 underline decoration-dotted">
+                                                            {item.unit || 'units'}
+                                                        </span>
+                                                        {user && (user.role === 'ADMIN' || user.role === 'OWNER') && locationsCount > 1 && (
+                                                            <span className="ml-2 text-[9px] text-gray-500 font-normal">
+                                                                across {locationsCount} locations
+                                                            </span>
+                                                        )}
                                                     </span>
                                                 </>
-                                            )
+                                            );
                                         })()}
                                     </div>
                                 </td>
