@@ -22,6 +22,7 @@ const verifyToken = (req, res, next) => {
         }
         req.userId = decoded.id;
         req.userRole = decoded.role;
+        req.storeNodeId = decoded.store_node_id; // Add store node scoping
         next();
     });
 };

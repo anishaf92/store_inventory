@@ -1,14 +1,15 @@
-const { Sequelize } = require('sequelize');
+// This script is no longer used; all utilities now rely on a single
+// DATABASE_URL environment variable. If you really need to discover
+// credentials, run the previous version manually. For now we simply
+// echo the current URL.
 const fs = require('fs');
 const path = require('path');
 
-const commonConfigs = [
-    { username: 'postgres', password: '' },
-    { username: 'postgres', password: 'password' },
-    { username: 'postgres', password: 'postgres' },
-    { username: 'postgres', password: '1234' },
-    { username: 'admin', password: 'password' },
-];
+console.log('DATABASE_URL is:', process.env.DATABASE_URL || '(not set)');
+console.log('Please set DATABASE_URL instead of individual DB_* variables.');
+
+// exit immediately since there’s nothing else to do
+process.exit(0);
 
 async function testConfig(config) {
     // Connect to default 'postgres' db just to check auth

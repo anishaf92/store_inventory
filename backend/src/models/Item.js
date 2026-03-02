@@ -7,6 +7,15 @@ module.exports = (sequelize) => {
             defaultValue: DataTypes.UUIDV4,
             primaryKey: true,
         },
+        category_id: {
+            type: DataTypes.UUID,
+            allowNull: false,
+        },
+        item_code: {
+            type: DataTypes.STRING,
+            unique: true,
+            allowNull: false,
+        },
         name: {
             type: DataTypes.STRING,
             allowNull: false,
@@ -37,11 +46,6 @@ module.exports = (sequelize) => {
             type: DataTypes.INTEGER,
             allowNull: false,
             defaultValue: 10,
-        },
-        current_stock: {
-            type: DataTypes.INTEGER,
-            allowNull: false,
-            defaultValue: 0,
         },
     }, {
         tableName: 'items',

@@ -1,7 +1,7 @@
 const { DataTypes } = require('sequelize');
 
 module.exports = (sequelize) => {
-    const Category = sequelize.define('Category', {
+    const StoreNode = sequelize.define('StoreNode', {
         id: {
             type: DataTypes.UUID,
             defaultValue: DataTypes.UUIDV4,
@@ -10,21 +10,22 @@ module.exports = (sequelize) => {
         name: {
             type: DataTypes.STRING,
             allowNull: false,
+        },
+        code: {
+            type: DataTypes.STRING,
             unique: true,
         },
-        description: {
-            type: DataTypes.TEXT,
-            allowNull: true,
+        location: {
+            type: DataTypes.STRING,
         },
-        specification_schema: {
-            type: DataTypes.JSONB,
-            allowNull: true,
-            defaultValue: { fields: [] },
-        },
+        is_active: {
+            type: DataTypes.BOOLEAN,
+            defaultValue: true,
+        }
     }, {
-        tableName: 'categories',
+        tableName: 'store_nodes',
         timestamps: true,
     });
 
-    return Category;
+    return StoreNode;
 };

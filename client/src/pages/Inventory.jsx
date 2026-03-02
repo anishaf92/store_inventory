@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useForm, useFieldArray } from 'react-hook-form';
 import api from '../services/api';
-import { Plus, Search, Tag, Package } from 'lucide-react';
+import { Plus, Search, Tag, Package, X } from 'lucide-react';
 
 const Inventory = () => {
     const [items, setItems] = useState([]);
@@ -13,13 +13,36 @@ const Inventory = () => {
     const [grnItem, setGrnItem] = useState(null);
 
     // Forms
-    const { register: registerItem, control, handleSubmit: handleItemSubmit, reset: resetItem, setValue } = useForm({
-        defaultValues: { name: '', make: '', grade: '', unit: '', low_stock_threshold: '', initial_stock: 0, specifications: [{ key: '', value: '' }] }
+    const { register: registerItem, control, handleSubmit: handleItemSubmit, reset: resetItem, setValue, watch } = useForm({
+        defaultValues: { name: '', item_code: '', make: '', grade: '', unit: '', low_stock_threshold: '', initial_stock: 0, specs: [] }
     });
-    const { fields, append, remove } = useFieldArray({ control, name: "specifications" });
 
-    const { register: registerCat, handleSubmit: handleCatSubmit, reset: resetCat } = useForm();
+    const { fields: itemSpecFields, append: appendItemSpec, remove: removeItemSpec } = useFieldArray({
+        control,
+        name: 'specs'
+    });
+
+    const watchedCategoryId = watch('category_id');
+    const selectedCategory = categories.find(c => c.id === watchedCategoryId);
+
+    const { register: registerCat, handleSubmit: handleCatSubmit, reset: resetCat, control: catControl } = useForm({
+        defaultValues: { name: '', description: '', specification_schema: { fields: [] } }
+    });
+
+    const { fields: catSpecFields, append: appendCatSpec, remove: removeCatSpec } = useFieldArray({
+        control: catControl,
+        name: 'specification_schema.fields'
+    });
     const { register: registerGRN, handleSubmit: handleGRNSubmit, reset: resetGRN } = useForm();
+
+    const lastCatIdRef = useRef(null);
+
+    useEffect(() => {
+        if (lastCatIdRef.current && watchedCategoryId !== lastCatIdRef.current) {
+            resetItem({ ...watch(), specs: [] });
+        }
+        lastCatIdRef.current = watchedCategoryId;
+    }, [watchedCategoryId, resetItem, watch]);
 
     useEffect(() => {
         fetchItems();
@@ -46,35 +69,50 @@ const Inventory = () => {
 
     const openEditModal = (item) => {
         setEditingItem(item);
-        const specs = item.specifications ? Object.entries(item.specifications).map(([key, value]) => ({ key, value })) : [{ key: '', value: '' }];
+
+        // Convert specifications object to array of { name, value }
+        const specsArray = item.specifications ? Object.entries(item.specifications).map(([name, value]) => ({ name, value })) : [];
 
         resetItem({
             name: item.name,
+            item_code: item.item_code,
+            category_id: item.category_id,
             make: item.make,
             grade: item.grade,
             unit: item.unit,
             low_stock_threshold: item.low_stock_threshold,
-            specifications: specs
+            specs: specsArray
         });
         setShowItemModal(true);
     };
 
     const openAddModal = () => {
         setEditingItem(null);
-        resetItem({ name: '', make: '', grade: '', unit: '', low_stock_threshold: '', specifications: [{ key: '', value: '' }] });
+        resetItem({
+            name: '',
+            item_code: `ITEM-${Math.floor(1000 + Math.random() * 9000)}`,
+            make: '',
+            grade: '',
+            unit: '',
+            low_stock_threshold: '',
+            specs: []
+        });
         setShowItemModal(true);
     };
 
     const onItemSubmit = async (data) => {
-        try {
-            // Convert specs array to object
-            const specsObj = {};
-            data.specifications.forEach(spec => {
-                if (spec.key) specsObj[spec.key] = spec.value;
+        // Convert specs array back to specifications object
+        const specifications = {};
+        if (data.specs) {
+            data.specs.forEach(s => {
+                if (s.name && s.value) specifications[s.name] = s.value;
             });
+        }
 
-            const payload = { ...data, specifications: specsObj };
+        const payload = { ...data, specifications };
+        delete payload.specs;
 
+        try {
             if (editingItem) {
                 const res = await api.put(`/inventory/items/${editingItem.id}`, payload);
                 alert(res.data.message || 'Item updated');
@@ -95,11 +133,21 @@ const Inventory = () => {
     };
 
     const onCatSubmit = async (data) => {
+        // Auto-generate keys and types for specifications
+        if (data.specification_schema?.fields) {
+            data.specification_schema.fields = data.specification_schema.fields.map(f => ({
+                ...f,
+                key: f.name.toLowerCase().replace(/[^a-z0-9]/g, '_'),
+                label: f.name,
+                type: f.options ? 'select' : 'string'
+            }));
+        }
+
         try {
             await api.post('/inventory/categories', data);
             setShowCategoryModal(false);
             resetCat();
-            // fetchCategories();
+            fetchCategories();
         } catch (err) {
             alert('Failed to create category');
         }
@@ -116,7 +164,7 @@ const Inventory = () => {
             await api.post('/inventory/grn', {
                 itemId: grnItem.id,
                 quantity: parseInt(data.quantity),
-                referenceId: data.referenceId
+                invoiceNumber: data.referenceId // Renamed parameter to align with backend changes
             });
             alert('Stock updated successfully');
             setShowGRNModal(false);
@@ -133,7 +181,7 @@ const Inventory = () => {
                 <h1 className="text-2xl font-bold text-gray-800">Inventory Management</h1>
                 <div className="space-x-3">
                     <button
-                        onClick={() => setShowCategoryModal(true)}
+                        onClick={() => { resetCat(); setShowCategoryModal(true); }}
                         className="bg-gray-200 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-300 font-medium inline-flex items-center"
                     >
                         <Tag className="w-4 h-4 mr-2" /> Add Category
@@ -167,6 +215,7 @@ const Inventory = () => {
                                         <Package className="w-8 h-8 text-gray-400 mr-3" />
                                         <div>
                                             <div className="text-sm font-medium text-gray-900">{item.name}</div>
+                                            <div className="text-xs text-gray-500 font-mono">{item.item_code}</div>
                                             <div className="text-sm text-gray-500">{item.make}</div>
                                         </div>
                                     </div>
@@ -179,12 +228,23 @@ const Inventory = () => {
                                 </td>
                                 <td className="px-6 py-4 whitespace-nowrap">
                                     <div className="flex flex-col">
-                                        <span className={`px-2 inline-flex text-[10px] leading-4 font-bold rounded-t border-x border-t ${item.current_stock < item.low_stock_threshold ? 'bg-red-50 text-red-600 border-red-200' : 'bg-green-50 text-green-600 border-green-200'}`}>
-                                            CURRENT STOCK
-                                        </span>
-                                        <span className={`px-2 py-1 inline-flex text-xs leading-5 font-bold rounded-b border-x border-b ${item.current_stock < item.low_stock_threshold ? 'bg-red-100 text-red-800 border-red-200' : 'bg-green-100 text-green-800 border-green-200'}`}>
-                                            {item.current_stock} <span className="ml-1 text-[10px] opacity-70 underline decoration-dotted">{item.unit || 'units'}</span>
-                                        </span>
+                                        {(() => {
+                                            // Extract stock from nested Inventories array
+                                            const stock = item.Inventories && item.Inventories.length > 0 ? item.Inventories[0].current_stock : 0;
+                                            const threshold = item.low_stock_threshold || 0;
+                                            const isLow = stock < threshold;
+
+                                            return (
+                                                <>
+                                                    <span className={`px-2 inline-flex text-[10px] leading-4 font-bold rounded-t border-x border-t ${isLow ? 'bg-red-50 text-red-600 border-red-200' : 'bg-green-50 text-green-600 border-green-200'}`}>
+                                                        CURRENT STOCK
+                                                    </span>
+                                                    <span className={`px-2 py-1 inline-flex text-xs leading-5 font-bold rounded-b border-x border-b ${isLow ? 'bg-red-100 text-red-800 border-red-200' : 'bg-green-100 text-green-800 border-green-200'}`}>
+                                                        {stock} <span className="ml-1 text-[10px] opacity-70 underline decoration-dotted">{item.unit || 'units'}</span>
+                                                    </span>
+                                                </>
+                                            )
+                                        })()}
                                     </div>
                                 </td>
                                 <td className="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-3">
@@ -199,12 +259,16 @@ const Inventory = () => {
 
             {/* Add/Edit Item Modal */}
             {showItemModal && (
-                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4">
-                    <div className="bg-white rounded-lg p-6 w-full max-w-2xl">
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+                    <div className="bg-white rounded-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
                         <h2 className="text-xl font-bold mb-4">{editingItem ? 'Edit Item' : 'Add New Item'}</h2>
                         <form onSubmit={handleItemSubmit(onItemSubmit)}>
                             <div className="grid grid-cols-2 gap-4">
-                                <div className="col-span-2">
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Item Code</label>
+                                    <input {...registerItem('item_code')} disabled={editingItem} className="border p-2 rounded w-full bg-gray-50 font-mono" required />
+                                </div>
+                                <div>
                                     <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Item Name</label>
                                     <input {...registerItem('name')} placeholder="e.g. Cement Bag" className="border p-2 rounded w-full" required />
                                 </div>
@@ -241,21 +305,82 @@ const Inventory = () => {
                                 </div>
                             </div>
 
-                            <div className="mt-4">
-                                <label className="block text-sm font-medium text-gray-700">Specifications</label>
-                                {fields.map((field, index) => (
-                                    <div key={field.id} className="flex gap-2 mt-2">
-                                        <input {...registerItem(`specifications.${index}.key`)} placeholder="Key (e.g., Voltage)" className="border p-2 rounded w-1/3" />
-                                        <input {...registerItem(`specifications.${index}.value`)} placeholder="Value (e.g., 220V)" className="border p-2 rounded w-1/3" />
-                                        <button type="button" onClick={() => remove(index)} className="text-red-500">Remove</button>
+                            {/* Dynamic Specifications */}
+                            {watchedCategoryId && (
+                                <div className="mt-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
+                                    <div className="flex justify-between items-center mb-3">
+                                        <h3 className="text-sm font-bold text-gray-700 uppercase tracking-wider">Dynamic Specifications</h3>
+                                        {selectedCategory?.specification_schema?.fields?.length > 0 && (
+                                            <button
+                                                type="button"
+                                                onClick={() => appendItemSpec({ name: '', value: '' })}
+                                                className="text-[10px] font-bold bg-blue-50 text-blue-600 px-3 py-1.5 rounded hover:bg-blue-100 uppercase"
+                                            >
+                                                + Add Specification
+                                            </button>
+                                        )}
                                     </div>
-                                ))}
-                                <button type="button" onClick={() => append({ key: '', value: '' })} className="mt-2 text-sm text-blue-600">+ Add Spec</button>
-                            </div>
+
+                                    <div className="space-y-3">
+                                        {itemSpecFields.map((field, index) => {
+                                            const specName = watch(`specs.${index}.name`);
+                                            const specDef = selectedCategory?.specification_schema?.fields?.find(f => f.name === specName);
+
+                                            return (
+                                                <div key={field.id} className="grid grid-cols-12 gap-2 items-end p-3 bg-white rounded border border-gray-100 relative group">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => removeItemSpec(index)}
+                                                        className="absolute -top-1 -right-1 bg-red-100 text-red-500 rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                                                    >
+                                                        <X className="w-3 h-3" />
+                                                    </button>
+                                                    <div className="col-span-5">
+                                                        <label className="block text-[8px] font-bold text-gray-400 uppercase mb-1">Specification Name</label>
+                                                        <select
+                                                            {...registerItem(`specs.${index}.name`, { required: true })}
+                                                            className="w-full bg-gray-50 rounded p-1.5 text-xs border border-gray-200"
+                                                        >
+                                                            <option value="">-- Select --</option>
+                                                            {selectedCategory?.specification_schema?.fields?.map(f => (
+                                                                <option key={f.key} value={f.name}>{f.name}</option>
+                                                            ))}
+                                                        </select>
+                                                    </div>
+                                                    <div className="col-span-7">
+                                                        <label className="block text-[8px] font-bold text-gray-400 uppercase mb-1">Value</label>
+                                                        {specDef?.options ? (
+                                                            <select
+                                                                {...registerItem(`specs.${index}.value`, { required: true })}
+                                                                className="w-full bg-gray-50 rounded p-1.5 text-xs border border-gray-200"
+                                                            >
+                                                                <option value="">-- Select --</option>
+                                                                {specDef.options.split(',').map(opt => (
+                                                                    <option key={opt.trim()} value={opt.trim()}>{opt.trim()}</option>
+                                                                ))}
+                                                            </select>
+                                                        ) : (
+                                                            <input
+                                                                {...registerItem(`specs.${index}.value`, { required: true })}
+                                                                className="w-full bg-gray-50 rounded p-1.5 text-xs border border-gray-200"
+                                                                placeholder={specDef ? `Enter ${specDef.label}` : "Select name first"}
+                                                                type={specDef?.type === 'number' ? 'number' : 'text'}
+                                                            />
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                        {itemSpecFields.length === 0 && (
+                                            <p className="text-[10px] text-gray-400 text-center py-4 italic">No specifications added. Click the button above to add some.</p>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
 
                             <div className="mt-6 flex justify-end space-x-3">
                                 <button type="button" onClick={() => setShowItemModal(false)} className="px-4 py-2 border rounded">Cancel</button>
-                                <button type="submit" className="px-4 py-2 bg-safety-orange text-white rounded">
+                                <button type="submit" className="px-4 py-2 bg-safety-orange text-white rounded shadow-lg font-bold">
                                     {editingItem ? 'Update Item' : 'Save Item'}
                                 </button>
                             </div>
@@ -266,15 +391,64 @@ const Inventory = () => {
 
             {/* Add Category Modal */}
             {showCategoryModal && (
-                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4">
-                    <div className="bg-white rounded-lg p-6 w-full max-w-md">
-                        <h2 className="text-xl font-bold mb-4">Add New Category</h2>
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+                    <div className="bg-white rounded-lg p-6 w-full max-w-xl max-h-[90vh] overflow-y-auto">
+                        <h2 className="text-xl font-bold mb-4">Add New Category Blueprint</h2>
                         <form onSubmit={handleCatSubmit(onCatSubmit)}>
-                            <input {...registerCat('name')} placeholder="Category Name" className="border p-2 rounded w-full mb-4" required />
-                            <textarea {...registerCat('description')} placeholder="Description" className="border p-2 rounded w-full mb-4" />
-                            <div className="flex justify-end space-x-3">
-                                <button type="button" onClick={() => setShowCategoryModal(false)} className="px-4 py-2 border rounded">Cancel</button>
-                                <button type="submit" className="px-4 py-2 bg-safety-orange text-white rounded">Save Category</button>
+                            <div className="space-y-4">
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Category Name</label>
+                                    <input {...registerCat('name')} placeholder="e.g. Electrical Cables" className="border p-2 rounded w-full" required />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Description</label>
+                                    <textarea {...registerCat('description')} placeholder="Description" className="border p-2 rounded w-full h-20" />
+                                </div>
+
+                                <div className="border-t pt-4 mt-4">
+                                    <div className="flex justify-between items-center mb-3">
+                                        <h3 className="text-sm font-bold text-gray-700 uppercase tracking-wider">Specification Blueprint</h3>
+                                        <button
+                                            type="button"
+                                            onClick={() => appendCatSpec({ name: '', options: '' })}
+                                            className="text-[10px] font-bold bg-blue-50 text-blue-600 px-3 py-1.5 rounded hover:bg-blue-100 uppercase transition-all"
+                                        >
+                                            + Add Field
+                                        </button>
+                                    </div>
+                                    <div className="space-y-3">
+                                        {catSpecFields.map((field, index) => (
+                                            <div key={field.id} className="grid grid-cols-12 gap-2 items-end p-3 bg-gray-50 rounded border border-gray-100 relative group">
+                                                <button type="button" onClick={() => removeCatSpec(index)} className="absolute -top-1 -right-1 bg-red-100 text-red-500 rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                    <X className="w-3 h-3" />
+                                                </button>
+                                                <div className="col-span-5">
+                                                    <label className="block text-[8px] font-bold text-gray-400 uppercase mb-1">Spec Name</label>
+                                                    <input
+                                                        {...registerCat(`specification_schema.fields.${index}.name`, { required: true })}
+                                                        className="w-full bg-white rounded p-1.5 text-xs border border-gray-200"
+                                                        placeholder="e.g. Diameter"
+                                                    />
+                                                </div>
+                                                <div className="col-span-7">
+                                                    <label className="block text-[8px] font-bold text-gray-400 uppercase mb-1">Options / Values (Comma Separated)</label>
+                                                    <input
+                                                        {...registerCat(`specification_schema.fields.${index}.options`)}
+                                                        className="w-full bg-white rounded p-1.5 text-xs border border-gray-200"
+                                                        placeholder="e.g. PVC, GI (Optional)"
+                                                    />
+                                                </div>
+                                            </div>
+                                        ))}
+                                        {catSpecFields.length === 0 && (
+                                            <p className="text-[10px] text-gray-400 text-center py-4 italic">No custom specifications defined.</p>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                            <div className="flex justify-end mt-6 space-x-3 border-t pt-4">
+                                <button type="button" onClick={() => { setShowCategoryModal(false); resetCat(); }} className="px-4 py-2 border rounded font-medium text-gray-500 hover:bg-gray-50">Cancel</button>
+                                <button type="submit" className="px-6 py-2 bg-safety-orange text-white rounded font-bold shadow-md hover:bg-orange-600">Save Blueprint</button>
                             </div>
                         </form>
                     </div>

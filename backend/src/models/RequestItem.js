@@ -39,6 +39,15 @@ module.exports = (sequelize) => {
             type: DataTypes.UUID,
             allowNull: true,
         },
+        category_id: {
+            type: DataTypes.UUID,
+            allowNull: true,
+        },
+        specifications: {
+            type: DataTypes.JSONB,
+            allowNull: true,
+            defaultValue: {},
+        },
     }, {
         tableName: 'request_items',
         timestamps: false,

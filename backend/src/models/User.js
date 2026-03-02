@@ -25,9 +25,13 @@ module.exports = (sequelize) => {
             allowNull: false,
         },
         role: {
-            type: DataTypes.ENUM('OWNER', 'STORE_MANAGER', 'STORE_KEEPER', 'PROJECT_MANAGER'),
+            type: DataTypes.ENUM('ADMIN', 'OWNER', 'STORE_MANAGER', 'STORE_KEEPER', 'PROJECT_MANAGER'),
             allowNull: false,
             defaultValue: 'STORE_KEEPER',
+        },
+        store_node_id: {
+            type: DataTypes.UUID,
+            allowNull: true,
         },
     }, {
         tableName: 'users',

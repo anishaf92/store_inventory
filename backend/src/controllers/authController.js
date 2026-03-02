@@ -28,7 +28,10 @@ exports.signup = async (req, res) => {
 
 exports.signin = async (req, res) => {
     try {
-        const user = await User.findOne({ where: { email: req.body.email } });
+        const user = await User.findOne({
+            where: { email: req.body.email },
+            include: [{ model: db.StoreNode, as: 'store', attributes: ['name'] }]
+        });
 
         if (!user) {
             return res.status(404).send({ message: "User Not found." });
@@ -43,15 +46,19 @@ exports.signin = async (req, res) => {
             });
         }
 
-        const token = jwt.sign({ id: user.id, role: user.role }, process.env.JWT_SECRET, {
-            expiresIn: 86400 // 24 hours
-        });
+        const token = jwt.sign(
+            { id: user.id, role: user.role, store_node_id: user.store_node_id },
+            process.env.JWT_SECRET,
+            { expiresIn: 86400 } // 24 hours
+        );
 
         res.status(200).send({
             id: user.id,
             name: user.name,
             email: user.email,
             role: user.role,
+            store_node_id: user.store_node_id,
+            store_name: user.store?.name || null,
             accessToken: token
         });
     } catch (err) {

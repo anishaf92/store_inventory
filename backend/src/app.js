@@ -20,12 +20,15 @@ const authRoutes = require('./routes/authRoutes');
 const inventoryRoutes = require('./routes/inventoryRoutes');
 const requestRoutes = require('./routes/requestRoutes');
 const auditRoutes = require('./routes/auditRoutes');
+const transferRoutes = require('./routes/transferRoutes');
 
 app.use('/api/auth', authRoutes);
 app.use('/api/inventory', inventoryRoutes);
 app.use('/api/requests', requestRoutes);
 app.use('/api/audit', auditRoutes);
 app.use('/api/projects', require('./routes/projectRoutes'));
+app.use('/api/transfers', transferRoutes);
+app.use('/api/admin', require('./routes/adminRoutes'));
 
 // Health Check
 app.get('/api/health', (req, res) => {

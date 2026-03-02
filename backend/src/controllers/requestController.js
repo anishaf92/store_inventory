@@ -8,21 +8,55 @@ const inventoryService = require('../services/inventoryService');
 
 exports.createRequest = async (req, res) => {
     try {
-        const { type, project_id, required_date, items } = req.body;
+        const { type, project_id, required_date, items, site_location_id, store_node_id } = req.body;
         const user = await db.User.findByPk(req.userId);
+        const userRole = user.role;
 
-        if (type === 'PR' && (user.role === 'STORE_MANAGER' || user.role === 'OWNER')) {
-            return res.status(403).send({ message: "Managers cannot create Purchase Requisitions directly. They can only approve/reject." });
+        // Role validations
+        if (type === 'PR_STORE' && userRole !== 'STORE_KEEPER') {
+            return res.status(403).send({ message: "Only Store Keepers can raise PR_STORE requests." });
+        }
+        if ((type === 'MR' || type === 'PR') && userRole !== 'PROJECT_MANAGER') {
+            return res.status(403).send({ message: "Only Project Managers can raise MR or PR requests." });
+        }
+        if (type === 'TRANSFER_REQUEST' && userRole !== 'STORE_KEEPER') {
+            return res.status(403).send({ message: "Only Store Keepers can raise TRANSFER_REQUEST." });
+        }
+
+        // Determine destination and source nodes
+        let resolvedStoreId = type === 'PR_STORE' ? user.store_node_id : store_node_id;
+        const resolvedSiteId = ['MR', 'PR', 'TRANSFER_REQUEST'].includes(type) ? site_location_id : null;
+
+        // Auto-resolve store node if missing for MR/PR (likely from PM)
+        if (!resolvedStoreId && ['MR', 'PR'].includes(type) && resolvedSiteId) {
+            const site = await db.SiteLocation.findByPk(resolvedSiteId);
+            if (site && site.store_node_id) {
+                resolvedStoreId = site.store_node_id;
+            } else {
+                return res.status(400).send({ message: "Selected site has no associated store. Please contact Admin." });
+            }
+        }
+
+        if (!resolvedStoreId) return res.status(400).send({ message: "Store Node ID is required." });
+        if (['MR', 'PR', 'TRANSFER_REQUEST'].includes(type) && !resolvedSiteId) {
+            return res.status(400).send({ message: "Site Location ID is required for this request type." });
+        }
+
+        // Status logic
+        let initialStatus = 'PENDING';
+        if (type === 'MR' || type === 'TRANSFER_REQUEST') {
+            initialStatus = 'REQUESTED'; // Direct action needed from Keeper
         }
 
         const newRequest = await Request.create({
-            type, // MR or PR
+            type,
+            initiated_by_role: userRole,
             requester_id: req.userId,
-            project_id,
+            project_id: project_id || null,
+            store_node_id: resolvedStoreId,
+            site_location_id: resolvedSiteId,
             required_date,
-            // MRs from PMs start as REQUESTED; they don't need manager approval.
-            // PRs start as PENDING (awaiting manager approval).
-            status: (type === 'MR' && user.role === 'PROJECT_MANAGER') ? 'REQUESTED' : 'PENDING'
+            status: initialStatus
         });
 
         if (items && items.length > 0) {
@@ -30,6 +64,8 @@ exports.createRequest = async (req, res) => {
                 request_id: newRequest.id,
                 item_id: item.item_id || null,
                 custom_item_name: item.custom_item_name || null,
+                category_id: item.category_id || null,
+                specifications: item.specifications || {},
                 quantity: item.quantity
             }));
             await RequestItem.bulkCreate(requestItems);
@@ -43,23 +79,32 @@ exports.createRequest = async (req, res) => {
 
 exports.getRequests = async (req, res) => {
     try {
-        const { type, status } = req.query;
+        const { type, status, project_id } = req.query;
         const where = {};
         if (type) where.type = type;
         if (status) where.status = status;
+        if (project_id) where.project_id = project_id;
 
-        // If Store Keeper, show all MRs (to fulfill) and PRs (they raised).
-        // If PM, show MRs they raised.
-        // If Manager/Owner, show everything.
+        const userRole = req.userRole;
 
-        // precise filtering can be added later, for now return all based on filters.
+        // PM Scoping Rule: PMs can ONLY see requests they personally created or linked to their own projects.
+        if (userRole === 'PROJECT_MANAGER') {
+            where.requester_id = req.userId;
+        }
+        // Store Keeper & Manager Scoping: Filter by assigned store node if present.
+        else if ((userRole === 'STORE_KEEPER' || userRole === 'STORE_MANAGER') && req.storeNodeId) {
+            where.store_node_id = req.storeNodeId;
+        }
+        // ADMIN, OWNER, STORE_MANAGER see everything (filtered locally by query params if needed)
 
         const requests = await Request.findAll({
             where,
             include: [
                 { model: User, as: 'requester', attributes: ['id', 'name', 'role'] },
-                { model: RequestItem, include: [Item] },
-                { model: Project, attributes: ['reference_number', 'location'] }
+                { model: RequestItem, include: [Item, db.Category] },
+                { model: Project, attributes: ['reference_number', 'location'] },
+                { model: db.SiteLocation, as: 'site', attributes: ['name', 'code'] },
+                { model: db.StoreNode, as: 'store', attributes: ['name', 'code'] }
             ],
             order: [['createdAt', 'DESC']]
         });
@@ -82,9 +127,9 @@ exports.updateStatus = async (req, res) => {
 
         const user = await db.User.findByPk(req.userId);
 
-        // Logic check: Manager approves PR -> status becomes IN_PROGRESS
+        // Logic check: Manager approves PR/PR_STORE -> status becomes IN_PROGRESS
         let finalStatus = status;
-        if (request.type === 'PR' && status === 'APPROVED') {
+        if ((request.type === 'PR' || request.type === 'PR_STORE') && status === 'APPROVED') {
             finalStatus = 'IN_PROGRESS';
         }
 
@@ -113,25 +158,42 @@ exports.fulfillRequestItem = async (req, res) => {
 
             // Check Stock (Only if it's a real item)
             if (requestItem.item_id) {
-                const item = await Item.findByPk(requestItem.item_id);
-                if (item.current_stock < qtyToIssue) {
-                    return res.status(400).send({ message: `Insufficient stock. Current: ${item.current_stock}, Needed: ${qtyToIssue}` });
+                const storeNodeId = requestItem.Request.store_node_id || req.storeNodeId;
+                const currentStock = await inventoryService.getStockForStore(storeNodeId, requestItem.item_id);
+
+                // If it's a PR (Purchase Requisition), we assume it's arriving from vendor
+                // so we auto-receive it into stock BEFORE issuing.
+                if (requestItem.Request.type === 'PR' && requestItem.issued_quantity === 0) {
+                    await inventoryService.processGRN(
+                        storeNodeId,
+                        requestItem.item_id,
+                        qtyToIssue,
+                        `AUTO-RECV-${requestItem.Request.id.slice(0, 8)}`,
+                        req.userId
+                    );
+                } else if (currentStock < qtyToIssue) {
+                    return res.status(400).send({ message: `Insufficient stock in store. Current: ${currentStock}, Needed: ${qtyToIssue}` });
                 }
             }
 
             // Deduct Stock (Only if it's a real item)
             if (requestItem.item_id) {
-                await inventoryService.processTransaction(
-                    'ISSUE',
+                // Determine store scoping
+                const storeNodeId = requestItem.Request.store_node_id || req.storeNodeId;
+                if (!storeNodeId) {
+                    return res.status(400).send({ message: "Cannot determine store_node_id for issue." });
+                }
+
+                await inventoryService.processIssue(
+                    storeNodeId,
+                    requestItem.Request.site_location_id,
                     requestItem.item_id,
                     qtyToIssue,
                     `REQ-${requestItem.Request.id.slice(0, 8)}`,
                     req.userId
                 );
             } else {
-                // For custom items, we assume they are being issued from some ad-hoc stock or just marked done.
-                // In a real app, we might force linking to a real item first. 
-                // For MVP, we just allow "issuing" it (essentially closing the line item).
+                // Custom item bypass
             }
 
             // Update Item Status
@@ -160,6 +222,32 @@ exports.fulfillRequestItem = async (req, res) => {
                 }
             }
 
+        } else if (action === 'RECEIVE') {
+            const qtyToReceive = requestItem.quantity - requestItem.issued_quantity;
+            if (!requestItem.item_id) {
+                return res.status(400).send({ message: "Cannot receive custom item. Convert to inventory first." });
+            }
+
+            const storeNodeId = requestItem.Request.store_node_id;
+            if (!storeNodeId) {
+                return res.status(400).send({ message: "Store Node ID is missing." });
+            }
+
+            // Process GRN (Adds stock)
+            await inventoryService.processGRN(
+                storeNodeId,
+                requestItem.item_id,
+                qtyToReceive,
+                `RECV-${requestItem.Request.id.slice(0, 8)}`,
+                req.userId
+            );
+
+            // Update Item Status
+            await requestItem.update({
+                issued_quantity: requestItem.quantity,
+                status: 'ISSUED'
+            });
+
         } else if (action === 'PROCUREMENT' || action === 'PROCURE_CONVERT') {
             if (action === 'PROCURE_CONVERT') {
                 const { category_id, unit } = req.body;
@@ -172,11 +260,12 @@ exports.fulfillRequestItem = async (req, res) => {
                 }
 
                 // Create the real item
-                const newItem = await Item.create({
+                const newItem = await db.Item.create({
+                    item_code: `ITEM-${Math.floor(1000 + Math.random() * 9000)}-${Date.now().toString().slice(-4)}`,
                     name: requestItem.custom_item_name,
                     category_id: category_id,
                     unit: unit || 'pcs',
-                    current_stock: 0,
+                    specifications: requestItem.specifications || {},
                     low_stock_threshold: 10 // Default
                 });
 
@@ -194,8 +283,11 @@ exports.fulfillRequestItem = async (req, res) => {
             if (requestItem.Request.type === 'MR') {
                 const pr = await Request.create({
                     type: 'PR',
+                    initiated_by_role: req.userRole,
                     requester_id: req.userId,
                     project_id: requestItem.Request.project_id,
+                    store_node_id: requestItem.Request.store_node_id,
+                    site_location_id: requestItem.Request.site_location_id,
                     required_date: requestItem.Request.required_date,
                     status: 'PENDING'
                 });
@@ -204,20 +296,32 @@ exports.fulfillRequestItem = async (req, res) => {
                     request_id: pr.id,
                     item_id: requestItem.item_id,
                     custom_item_name: requestItem.custom_item_name,
+                    category_id: requestItem.category_id,
+                    specifications: requestItem.specifications,
                     quantity: requestItem.quantity,
                     parent_item_id: requestItem.id // Link back to original MR item
                 });
             }
+        } else if (action === 'PM_RECEIVE') {
+            // Updated by Project Manager to confirm receipt at site
+            await requestItem.update({ status: 'RECEIVED' });
+        } else if (action === 'PM_COMPLETE') {
+            // Updated by Project Manager to indicate item is no longer needed/fully consumed
+            await requestItem.update({ status: 'COMPLETED' });
         }
 
-        // Update request status: PARTIALLY_FULFILLED or FULFILLED based on items
+        // Update request status: PARTIALLY_FULFILLED, FULFILLED, or COMPLETED based on items
         const allItems = await RequestItem.findAll({ where: { request_id: requestItem.request_id } });
-        const allIssued = allItems.every(i => i.status === 'ISSUED');
-        const someIssued = allItems.some(i => i.status === 'ISSUED');
 
-        if (allIssued) {
+        const allCompleted = allItems.every(i => i.status === 'COMPLETED');
+        const allIssuedOrBetter = allItems.every(i => ['ISSUED', 'RECEIVED', 'COMPLETED'].includes(i.status));
+        const someIssuedOrBetter = allItems.some(i => ['ISSUED', 'RECEIVED', 'COMPLETED'].includes(i.status));
+
+        if (allCompleted) {
+            await Request.update({ status: 'COMPLETED' }, { where: { id: requestItem.request_id } });
+        } else if (allIssuedOrBetter) {
             await Request.update({ status: 'FULFILLED' }, { where: { id: requestItem.request_id } });
-        } else if (someIssued) {
+        } else if (someIssuedOrBetter) {
             await Request.update({ status: 'PARTIALLY_FULFILLED' }, { where: { id: requestItem.request_id } });
         }
 
@@ -225,6 +329,81 @@ exports.fulfillRequestItem = async (req, res) => {
 
     } catch (err) {
         console.error(err);
+        res.status(500).send({ message: err.message });
+    }
+};
+
+// Store and Site helpers for scoped dropdowns and PM site creation
+exports.getStoresForUser = async (req, res) => {
+    try {
+        const userRole = req.userRole;
+        const storeNodeId = req.storeNodeId;
+
+        const where = {};
+
+        // Store-scoped roles only see their assigned store
+        if ((userRole === 'STORE_KEEPER' || userRole === 'STORE_MANAGER') && storeNodeId) {
+            where.id = storeNodeId;
+        }
+
+        const stores = await db.StoreNode.findAll({
+            where,
+            order: [['name', 'ASC']]
+        });
+
+        res.json(stores);
+    } catch (err) {
+        res.status(500).send({ message: err.message });
+    }
+};
+
+exports.getSitesForUser = async (req, res) => {
+    try {
+        const userRole = req.userRole;
+        const storeNodeId = req.storeNodeId;
+
+        const where = {};
+
+        // For store-scoped roles, only return sites linked to their store node
+        if ((userRole === 'STORE_KEEPER' || userRole === 'STORE_MANAGER') && storeNodeId) {
+            where.store_node_id = storeNodeId;
+        }
+
+        const sites = await db.SiteLocation.findAll({
+            where,
+            order: [['name', 'ASC']]
+        });
+
+        res.json(sites);
+    } catch (err) {
+        res.status(500).send({ message: err.message });
+    }
+};
+
+exports.createSiteByPM = async (req, res) => {
+    try {
+        const userRole = req.userRole;
+
+        if (userRole !== 'PROJECT_MANAGER') {
+            return res.status(403).send({ message: "Only Project Managers can create sites." });
+        }
+
+        const { name, code, address } = req.body;
+
+        if (!name) {
+            return res.status(400).send({ message: "Site name is required." });
+        }
+
+        const site = await db.SiteLocation.create({
+            name,
+            code: code || null,
+            address: address || null,
+            created_by: req.userId,
+            store_node_id: null // Admin will later map this to the appropriate store
+        });
+
+        res.status(201).json(site);
+    } catch (err) {
         res.status(500).send({ message: err.message });
     }
 };

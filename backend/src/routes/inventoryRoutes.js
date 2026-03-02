@@ -5,9 +5,12 @@ const { verifyToken, checkRole } = require('../middleware/authMiddleware');
 
 router.get('/dashboard', [verifyToken], controller.getDashboardStats);
 router.get('/items', [verifyToken], controller.getItems);
+router.get('/items/:id/distribution', [verifyToken], controller.getItemDistribution);
 router.post('/items', [verifyToken, checkRole(['OWNER', 'STORE_MANAGER', 'STORE_KEEPER'])], controller.createItem);
 router.get('/categories', [verifyToken], controller.getCategories);
-router.post('/categories', [verifyToken, checkRole(['OWNER', 'STORE_MANAGER', 'STORE_KEEPER'])], controller.createCategory);
+router.post('/categories', [verifyToken, checkRole(['OWNER', 'STORE_MANAGER', 'STORE_KEEPER', 'ADMIN'])], controller.createCategory);
+router.put('/categories/:id', [verifyToken, checkRole(['OWNER', 'STORE_MANAGER', 'ADMIN'])], controller.updateCategory);
+router.delete('/categories/:id', [verifyToken, checkRole(['OWNER', 'STORE_MANAGER', 'ADMIN'])], controller.deleteCategory);
 
 router.post('/grn', [verifyToken, checkRole(['OWNER', 'STORE_MANAGER', 'STORE_KEEPER'])], controller.processGRN);
 router.post('/issue', [verifyToken, checkRole(['OWNER', 'STORE_MANAGER', 'STORE_KEEPER'])], controller.processIssue);

@@ -8,12 +8,25 @@ module.exports = (sequelize) => {
             primaryKey: true,
         },
         type: {
-            type: DataTypes.ENUM('MR', 'PR'),
+            type: DataTypes.ENUM('MR', 'PR', 'PR_STORE', 'TRANSFER_REQUEST'),
             allowNull: false,
+        },
+        initiated_by_role: {
+            type: DataTypes.ENUM('PROJECT_MANAGER', 'STORE_KEEPER'),
+            allowNull: false,
+            defaultValue: 'PROJECT_MANAGER',
         },
         requester_id: {
             type: DataTypes.UUID,
             allowNull: false,
+        },
+        store_node_id: {
+            type: DataTypes.UUID,
+            allowNull: false,
+        },
+        site_location_id: {
+            type: DataTypes.UUID,
+            allowNull: true,
         },
         project_id: {
             type: DataTypes.UUID,

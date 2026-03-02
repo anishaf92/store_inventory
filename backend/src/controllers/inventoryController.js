@@ -6,7 +6,20 @@ const { Op } = require('sequelize');
 
 exports.getItems = async (req, res) => {
     try {
-        const items = await Item.findAll({ include: Category });
+        const storeNodeId = req.storeNodeId;
+        const whereClause = storeNodeId ? { store_node_id: storeNodeId } : {};
+
+        // Fetch Items and their inventory balance at the given store
+        const items = await Item.findAll({
+            include: [
+                Category,
+                {
+                    model: db.Inventory,
+                    required: false, // LEFT JOIN
+                    where: whereClause
+                }
+            ]
+        });
         res.json(items);
     } catch (err) {
         res.status(500).send({ message: err.message });
@@ -15,25 +28,23 @@ exports.getItems = async (req, res) => {
 
 exports.createItem = async (req, res) => {
     try {
-        // RBAC: Only Owner or Store Manager can create items directly? 
-        // Or Store Keeper can create but needs approval?
-        // prompt says: "Store Keeper must see a dashboard... allow Store Keeper to raise a Purchase Requisition... Edit Permission logic where Store Keeper needs Manager's digital approval to modify existing records."
-        // It doesn't explicitly restrict creation, but let's assume Manager/Owner mainly.
-        // For now, allow logged in users but maybe restricted.
-
-        // We'll trust the route middleware for role checking.
-        const { name, category_id, grade, make, unit, specifications, low_stock_threshold, initial_stock } = req.body;
+        const { item_code, name, category_id, grade, make, unit, specifications, low_stock_threshold, initial_stock } = req.body;
         const stockValue = parseInt(initial_stock) || 0;
+        const storeNodeId = req.storeNodeId;
+
+        // Check if item_code is unique
+        const existingCode = await Item.findOne({ where: { item_code } });
+        if (existingCode) return res.status(400).send({ message: 'Item code must be unique' });
 
         const item = await Item.create({
+            item_code,
             name,
             category_id,
             grade,
             make,
             unit,
             specifications,
-            low_stock_threshold,
-            current_stock: stockValue
+            low_stock_threshold
         });
 
         // Audit item creation
@@ -45,15 +56,9 @@ exports.createItem = async (req, res) => {
             new_values: item.toJSON()
         });
 
-        // Record Initial Stock Transaction
-        if (stockValue > 0) {
-            await db.InventoryTransaction.create({
-                type: 'GRN',
-                item_id: item.id,
-                quantity: stockValue,
-                reference_id: 'INITIAL_STOCK',
-                performed_by: req.userId
-            });
+        // Record Initial Stock Transaction (if applicable)
+        if (stockValue > 0 && storeNodeId) {
+            await inventoryService.processGRN(storeNodeId, item.id, stockValue, 'INITIAL_STOCK', req.userId);
         }
 
         res.send(item);
@@ -81,6 +86,32 @@ exports.createCategory = async (req, res) => {
     }
 };
 
+exports.updateCategory = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const category = await Category.findByPk(id);
+        if (!category) return res.status(404).send({ message: "Category not found" });
+
+        await category.update(req.body);
+        res.send(category);
+    } catch (err) {
+        res.status(500).send({ message: err.message });
+    }
+};
+
+exports.deleteCategory = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const category = await Category.findByPk(id);
+        if (!category) return res.status(404).send({ message: "Category not found" });
+
+        await category.destroy();
+        res.send({ message: "Category deleted" });
+    } catch (err) {
+        res.status(500).send({ message: err.message });
+    }
+};
+
 exports.getCategories = async (req, res) => {
     try {
         const categories = await Category.findAll();
@@ -92,8 +123,12 @@ exports.getCategories = async (req, res) => {
 
 exports.processGRN = async (req, res) => {
     try {
-        const { itemId, quantity, referenceId } = req.body;
-        const result = await inventoryService.processTransaction('GRN', itemId, quantity, referenceId, req.userId);
+        const { itemId, quantity, invoiceNumber } = req.body;
+        const storeNodeId = req.storeNodeId;
+
+        if (!storeNodeId) return res.status(403).send({ message: "Store assignment required for GRN" });
+
+        const result = await inventoryService.processGRN(storeNodeId, itemId, quantity, invoiceNumber, req.userId);
         res.send({ message: "Stock Updated (GRN)", result });
     } catch (err) {
         res.status(500).send({ message: err.message });
@@ -102,9 +137,12 @@ exports.processGRN = async (req, res) => {
 
 exports.processIssue = async (req, res) => {
     try {
-        const { itemId, quantity, referenceId } = req.body;
-        // In a real app, we might need to check if there is an approved Request first.
-        const result = await inventoryService.processTransaction('ISSUE', itemId, quantity, referenceId, req.userId);
+        const { itemId, quantity, referenceId, siteLocationId } = req.body;
+        const storeNodeId = req.storeNodeId;
+
+        if (!storeNodeId) return res.status(403).send({ message: "Store assignment required for Issues" });
+
+        const result = await inventoryService.processIssue(storeNodeId, siteLocationId, itemId, quantity, referenceId, req.userId);
         res.send({ message: "Stock Updated (Issue)", result });
     } catch (err) {
         res.status(500).send({ message: err.message });
@@ -208,9 +246,9 @@ exports.getDashboardStats = async (req, res) => {
         const role = user.role;
 
         const stats = {};
+        const storeNodeId = user.store_node_id;
 
         if (role === 'PROJECT_MANAGER') {
-            // PM specific stats
             stats.totalProjects = await db.Project.count();
             stats.myRequests = await db.Request.count({
                 where: { requester_id: req.userId }
@@ -218,21 +256,51 @@ exports.getDashboardStats = async (req, res) => {
             stats.pendingApprovals = await db.Request.count({
                 where: { requester_id: req.userId, status: 'PENDING' }
             });
-            // Still show some activity but filtered if needed? For now global or specific.
         } else {
-            // Global stats for Manager/Owner/Keeper
-            stats.lowStock = await Item.count({
+            // Global or Store-specific stats
+            const inventoryWhere = storeNodeId ? { store_node_id: storeNodeId } : {};
+
+            // Total unique items in the catalog (or available in store)
+            if (storeNodeId) {
+                stats.totalItems = await db.Inventory.count({
+                    distinct: true,
+                    col: 'item_id',
+                    where: inventoryWhere
+                });
+            } else {
+                stats.totalItems = await Item.count();
+            }
+
+            stats.pendingRequests = await db.Request.count({
                 where: {
-                    current_stock: { [Op.lt]: db.sequelize.col('low_stock_threshold') }
+                    status: 'PENDING',
+                    ...(storeNodeId ? { store_node_id: storeNodeId } : {})
                 }
             });
-            stats.pendingRequests = await db.Request.count({
-                where: { status: 'PENDING' }
+
+            // Low Stock Calculation
+            // We need to compare Item.low_stock_threshold with SUM(Inventory.current_stock)
+            const lowStockItems = await Item.findAll({
+                include: [{
+                    model: db.Inventory,
+                    attributes: [],
+                    where: inventoryWhere,
+                    required: true
+                }],
+                attributes: [
+                    'id',
+                    'low_stock_threshold',
+                    [db.sequelize.fn('SUM', db.sequelize.col('Inventories.current_stock')), 'total_stock']
+                ],
+                group: ['Item.id'],
+                having: db.sequelize.literal(`SUM("Inventories"."current_stock") < "Item"."low_stock_threshold"`)
             });
-            stats.totalItems = await Item.count();
+            stats.lowStock = lowStockItems.length;
         }
 
+        const activityWhere = storeNodeId ? { store_node_id: storeNodeId } : {};
         stats.recentActivity = await db.InventoryTransaction.findAll({
+            where: activityWhere,
             limit: 5,
             order: [['createdAt', 'DESC']],
             include: [{ model: Item, attributes: ['name', 'unit'] }]
@@ -241,6 +309,36 @@ exports.getDashboardStats = async (req, res) => {
         res.json(stats);
     } catch (err) {
         console.error(err);
+        res.status(500).send({ message: err.message });
+    }
+};
+
+exports.getItemDistribution = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const userRole = req.userRole;
+        const storeNodeId = req.storeNodeId;
+
+        // Scope visibility for store-scoped roles:
+        // - Store Keepers/Managers should only see distribution within their own store node.
+        // - Other roles (ADMIN/OWNER/PM) can see the full distribution.
+        const whereClause = {
+            item_id: id,
+            ...(((userRole === 'STORE_KEEPER' || userRole === 'STORE_MANAGER') && storeNodeId)
+                ? { store_node_id: storeNodeId }
+                : {})
+        };
+
+        const distribution = await db.Inventory.findAll({
+            where: whereClause,
+            include: [
+                { model: db.StoreNode, as: 'store', attributes: ['id', 'name', 'code'] },
+                { model: db.SiteLocation, as: 'site', attributes: ['id', 'name', 'code'] }
+            ],
+            attributes: ['current_stock', 'reserved_stock']
+        });
+        res.json(distribution);
+    } catch (err) {
         res.status(500).send({ message: err.message });
     }
 };

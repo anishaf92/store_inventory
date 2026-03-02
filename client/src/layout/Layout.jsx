@@ -1,7 +1,7 @@
 import React, { useContext } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { AuthContext } from '../context/AuthContext';
-import { LayoutDashboard, Box, FileText, LogOut, ShieldCheck } from 'lucide-react';
+import { LayoutDashboard, Box, FileText, LogOut, ShieldCheck, Truck, Settings } from 'lucide-react';
 
 const Layout = ({ children }) => {
     const { user, logout } = useContext(AuthContext);
@@ -14,11 +14,13 @@ const Layout = ({ children }) => {
     };
 
     const navItems = [
-        { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard, roles: ['OWNER', 'STORE_MANAGER', 'STORE_KEEPER', 'PROJECT_MANAGER'] },
-        { name: 'Inventory', path: '/inventory', icon: Box, roles: ['OWNER', 'STORE_MANAGER', 'STORE_KEEPER'] },
-        { name: 'Projects', path: '/projects', icon: FileText, roles: ['OWNER', 'PROJECT_MANAGER'] },
-        { name: 'Requests', path: '/requests', icon: FileText, roles: ['OWNER', 'STORE_MANAGER', 'STORE_KEEPER', 'PROJECT_MANAGER'] },
-        { name: 'Audit Logs', path: '/audit', icon: ShieldCheck, roles: ['OWNER', 'STORE_MANAGER'] },
+        { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard, roles: ['ADMIN', 'OWNER', 'STORE_MANAGER', 'STORE_KEEPER', 'PROJECT_MANAGER'] },
+        { name: 'Inventory', path: '/inventory', icon: Box, roles: ['ADMIN', 'OWNER', 'STORE_MANAGER', 'STORE_KEEPER'] },
+        { name: 'Transfers', path: '/transfers', icon: Truck, roles: ['ADMIN', 'OWNER', 'STORE_MANAGER', 'STORE_KEEPER', 'PROJECT_MANAGER'] },
+        { name: 'Projects', path: '/projects', icon: FileText, roles: ['ADMIN', 'OWNER', 'PROJECT_MANAGER'] },
+        { name: 'Requests', path: '/requests', icon: FileText, roles: ['ADMIN', 'OWNER', 'STORE_MANAGER', 'STORE_KEEPER', 'PROJECT_MANAGER'] },
+        { name: 'Audit Logs', path: '/audit', icon: ShieldCheck, roles: ['ADMIN', 'OWNER', 'STORE_MANAGER'] },
+        { name: 'Admin', path: '/admin', icon: Settings, roles: ['ADMIN'] },
     ];
 
     return (
@@ -60,6 +62,11 @@ const Layout = ({ children }) => {
                         <div className="ml-3">
                             <p className="text-sm font-medium text-white">{user?.name}</p>
                             <p className="text-xs text-gray-400 capitalize">{user?.role?.replace('_', ' ').toLowerCase()}</p>
+                            {user?.store_name && (
+                                <p className="text-[10px] text-safety-orange font-bold uppercase tracking-tighter mt-0.5">
+                                    {user.store_name}
+                                </p>
+                            )}
                         </div>
                     </div>
                     <button

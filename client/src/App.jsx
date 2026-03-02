@@ -9,6 +9,8 @@ import Inventory from './pages/Inventory';
 import Requests from './pages/Requests';
 import Projects from './pages/Projects';
 import AuditLogs from './pages/AuditLogs';
+import Transfers from './pages/Transfers';
+import Admin from './pages/Admin';
 
 function App() {
   return (
@@ -45,6 +47,20 @@ function App() {
             <ProtectedRoute>
               <Layout>
                 <Requests />
+              </Layout>
+            </ProtectedRoute>
+          } />
+          <Route path="/transfers" element={
+            <ProtectedRoute>
+              <Layout>
+                <Transfers />
+              </Layout>
+            </ProtectedRoute>
+          } />
+          <Route path="/admin" element={
+            <ProtectedRoute>
+              <Layout>
+                <Admin />
               </Layout>
             </ProtectedRoute>
           } />
