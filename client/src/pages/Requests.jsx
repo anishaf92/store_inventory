@@ -108,9 +108,9 @@ const Requests = () => {
                 requestType = data.type;
             }
 
-            // Fallback for store node and site location
-            const payload_store_id = data.store_node_id || user.store_node_id || '4b902617-60ea-4fa6-8114-64c450754dce';
-            const payload_site_id = data.site_location_id || 'aa9f8307-d170-4c9d-8347-9549bbb865a2'; // default from migration
+            // Keep payload strict; avoid hardcoded IDs that may be invalid per environment.
+            const payload_store_id = data.store_node_id || user.store_node_id || null;
+            const payload_site_id = data.site_location_id || null;
 
             await api.post('/requests', {
                 ...data,

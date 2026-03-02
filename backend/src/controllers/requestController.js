@@ -24,7 +24,10 @@ exports.createRequest = async (req, res) => {
         }
 
         // Determine destination and source nodes
-        let resolvedStoreId = type === 'PR_STORE' ? user.store_node_id : store_node_id;
+        // Keepers can explicitly pick source store from UI; fallback to their assigned store.
+        let resolvedStoreId = ['PR_STORE', 'TRANSFER_REQUEST'].includes(type)
+            ? (store_node_id || user.store_node_id)
+            : store_node_id;
         const resolvedSiteId = ['MR', 'PR', 'TRANSFER_REQUEST'].includes(type) ? site_location_id : null;
 
         // Auto-resolve store node if missing for MR/PR (likely from PM)
@@ -34,6 +37,14 @@ exports.createRequest = async (req, res) => {
                 resolvedStoreId = site.store_node_id;
             } else {
                 return res.status(400).send({ message: "Selected site has no associated store. Please contact Admin." });
+            }
+        }
+
+        // Validate site existence for site-based request types.
+        if (resolvedSiteId) {
+            const site = await db.SiteLocation.findByPk(resolvedSiteId);
+            if (!site) {
+                return res.status(400).send({ message: "Selected site is invalid." });
             }
         }
 
