@@ -1,5 +1,4 @@
 {
-  "//": "Vercel configuration for deploying the React frontend (client) only. Backend runs separately and is configured via VITE_API_BASE_URL.",
   "version": 2,
   "builds": [
     {
