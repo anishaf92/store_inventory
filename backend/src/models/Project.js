@@ -31,6 +31,20 @@ module.exports = (sequelize) => {
         status: {
             type: DataTypes.ENUM('ACTIVE', 'COMPLETED', 'ON_HOLD'),
             defaultValue: 'ACTIVE',
+        },
+        // Legacy mapping to old StoreNode structure (to be deprecated)
+        store_node_id: {
+            type: DataTypes.UUID,
+            allowNull: true,
+        },
+        // New project-level assignments
+        project_manager_id: {
+            type: DataTypes.UUID,
+            allowNull: true,
+        },
+        store_keeper_id: {
+            type: DataTypes.UUID,
+            allowNull: true,
         }
     }, {
         tableName: 'projects',

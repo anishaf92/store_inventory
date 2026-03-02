@@ -1,23 +1,16 @@
 const { DataTypes } = require('sequelize');
 
 module.exports = (sequelize) => {
-    const SiteLocation = sequelize.define('SiteLocation', {
+    const ProjectStore = sequelize.define('ProjectStore', {
         id: {
             type: DataTypes.UUID,
             defaultValue: DataTypes.UUIDV4,
             primaryKey: true,
         },
-        store_node_id: {
-            type: DataTypes.UUID,
-            allowNull: true,
-        },
         project_id: {
             type: DataTypes.UUID,
-            allowNull: true,
-        },
-        created_by: {
-            type: DataTypes.UUID,
             allowNull: false,
+            unique: true, // one store per project
         },
         name: {
             type: DataTypes.STRING,
@@ -25,14 +18,17 @@ module.exports = (sequelize) => {
         },
         code: {
             type: DataTypes.STRING,
+            allowNull: true,
         },
-        address: {
-            type: DataTypes.TEXT,
+        location: {
+            type: DataTypes.STRING,
+            allowNull: true,
         },
     }, {
-        tableName: 'site_locations',
+        tableName: 'project_stores',
         timestamps: true,
     });
 
-    return SiteLocation;
+    return ProjectStore;
 };
+

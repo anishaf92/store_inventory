@@ -11,11 +11,21 @@ module.exports = (sequelize) => {
             type: DataTypes.UUID,
             allowNull: false,
         },
+        // Legacy fields for old StoreNode/SiteLocation structure
         store_node_id: {
             type: DataTypes.UUID,
             allowNull: false,
         },
         site_location_id: {
+            type: DataTypes.UUID,
+            allowNull: true,
+        },
+        // New project-centric fields
+        project_store_id: {
+            type: DataTypes.UUID,
+            allowNull: true,
+        },
+        project_location_id: {
             type: DataTypes.UUID,
             allowNull: true,
         },

@@ -32,7 +32,14 @@ module.exports = (sequelize) => {
             defaultValue: 0,
         },
         status: {
-            type: DataTypes.ENUM('PENDING', 'ISSUED', 'NEEDS_PROCUREMENT', 'PARTIALLY_ISSUED'),
+            type: DataTypes.ENUM(
+                'PENDING',
+                'ISSUED',
+                'NEEDS_PROCUREMENT',
+                'PARTIALLY_ISSUED',
+                'RECEIVED',
+                'COMPLETED'
+            ),
             defaultValue: 'PENDING',
         },
         parent_item_id: {

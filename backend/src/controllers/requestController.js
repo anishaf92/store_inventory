@@ -13,14 +13,20 @@ exports.createRequest = async (req, res) => {
         const userRole = user.role;
 
         // Role validations
+        // PM: can only raise MR (Material Requisition)
+        if (type === 'MR' && userRole !== 'PROJECT_MANAGER') {
+            return res.status(403).send({ message: "Only Project Managers can raise MR requests." });
+        }
+        // Store Keeper: can raise PR_STORE (store purchase) and TRANSFER_REQUEST
         if (type === 'PR_STORE' && userRole !== 'STORE_KEEPER') {
             return res.status(403).send({ message: "Only Store Keepers can raise PR_STORE requests." });
         }
-        if ((type === 'MR' || type === 'PR') && userRole !== 'PROJECT_MANAGER') {
-            return res.status(403).send({ message: "Only Project Managers can raise MR or PR requests." });
-        }
         if (type === 'TRANSFER_REQUEST' && userRole !== 'STORE_KEEPER') {
             return res.status(403).send({ message: "Only Store Keepers can raise TRANSFER_REQUEST." });
+        }
+        // Direct PRs are system-generated from MR; block manual PR creation
+        if (type === 'PR') {
+            return res.status(400).send({ message: "Direct PR requests are system generated from MR. Users cannot raise PR directly." });
         }
 
         // Determine destination and source nodes
@@ -30,25 +36,69 @@ exports.createRequest = async (req, res) => {
             : store_node_id;
         const resolvedSiteId = ['MR', 'PR', 'TRANSFER_REQUEST'].includes(type) ? site_location_id : null;
 
-        // Auto-resolve store node if missing for MR/PR (likely from PM)
-        if (!resolvedStoreId && ['MR', 'PR'].includes(type) && resolvedSiteId) {
-            const site = await db.SiteLocation.findByPk(resolvedSiteId);
-            if (site && site.store_node_id) {
-                resolvedStoreId = site.store_node_id;
-            } else {
-                return res.status(400).send({ message: "Selected site has no associated store. Please contact Admin." });
+        // Project-centric store resolution for MR / PR:
+        // If a project is selected and we don't yet know the store, create/link a dedicated StoreNode based on the project's ProjectStore.
+        let project = null;
+        let projectStore = null;
+        if (project_id) {
+            project = await db.Project.findByPk(project_id, {
+                include: [{ model: db.ProjectStore, as: 'project_store' }]
+            });
+            if (!project) {
+                return res.status(400).send({ message: "Selected project is invalid." });
+            }
+            projectStore = project.project_store || null;
+
+            if (!resolvedStoreId) {
+                if (project.store_node_id) {
+                    resolvedStoreId = project.store_node_id;
+                } else {
+                    // Create a backing StoreNode for this project's dedicated store (legacy layer kept internal)
+                    const storePayload = {
+                        name: (projectStore && projectStore.name) || `Store for ${project.reference_number || 'Project'}`,
+                        code: (projectStore && projectStore.code) || null,
+                        location: (projectStore && projectStore.location) || project.location || null
+                    };
+                    const backingStore = await db.StoreNode.create(storePayload);
+                    await project.update({ store_node_id: backingStore.id });
+                    resolvedStoreId = backingStore.id;
+                }
             }
         }
 
-        // Validate site existence for site-based request types.
+        // Site-first resolution: when a site is selected, derive/validate the linked store node.
         if (resolvedSiteId) {
             const site = await db.SiteLocation.findByPk(resolvedSiteId);
             if (!site) {
                 return res.status(400).send({ message: "Selected site is invalid." });
             }
+            // Ensure site belongs to the selected project when provided
+            if (project && site.project_id && site.project_id !== project_id) {
+                return res.status(400).send({ message: "Selected site does not belong to the selected project." });
+            }
+
+            // If site has no store mapping, attach it to the project's backing store (if available)
+            if (!site.store_node_id) {
+                if (resolvedStoreId) {
+                    site.store_node_id = resolvedStoreId;
+                    await site.save();
+                } else {
+                    return res.status(400).send({ message: "Selected site has no associated store. Please contact Admin." });
+                }
+            }
+
+            if (!resolvedStoreId) {
+                resolvedStoreId = site.store_node_id;
+            } else if (resolvedStoreId !== site.store_node_id) {
+                return res.status(400).send({ message: "Selected site belongs to a different store." });
+            }
         }
 
         if (!resolvedStoreId) return res.status(400).send({ message: "Store Node ID is required." });
+        const storeExists = await db.StoreNode.findByPk(resolvedStoreId);
+        if (!storeExists) {
+            return res.status(400).send({ message: "Selected store is invalid. Please choose a valid store." });
+        }
         if (['MR', 'PR', 'TRANSFER_REQUEST'].includes(type) && !resolvedSiteId) {
             return res.status(400).send({ message: "Site Location ID is required for this request type." });
         }
@@ -102,24 +152,47 @@ exports.getRequests = async (req, res) => {
         if (userRole === 'PROJECT_MANAGER') {
             where.requester_id = req.userId;
         }
-        // Store Keeper & Manager Scoping: Filter by assigned store node if present.
-        else if ((userRole === 'STORE_KEEPER' || userRole === 'STORE_MANAGER') && req.storeNodeId) {
-            where.store_node_id = req.storeNodeId;
-        }
-        // ADMIN, OWNER, STORE_MANAGER see everything (filtered locally by query params if needed)
+        // STORE_MANAGER sees requests from all stores (no store filter).
+        // STORE_KEEPER scoping is applied after fetch so we can also include
+        // MR/PR linked to projects where they are the assigned store keeper.
 
         const requests = await Request.findAll({
             where,
             include: [
                 { model: User, as: 'requester', attributes: ['id', 'name', 'role'] },
                 { model: RequestItem, include: [Item, db.Category] },
-                { model: Project, attributes: ['reference_number', 'location'] },
+                { model: Project, attributes: ['reference_number', 'location', 'store_keeper_id'] },
                 { model: db.SiteLocation, as: 'site', attributes: ['name', 'code'] },
                 { model: db.StoreNode, as: 'store', attributes: ['name', 'code'] }
             ],
             order: [['createdAt', 'DESC']]
         });
-        res.send(requests);
+
+        // Post-filter for STORE_KEEPER:
+        // - Requests where store_node_id matches their assigned store
+        // - OR requests whose project has them as the assigned store keeper
+        let scoped = requests;
+
+        if (userRole === 'STORE_KEEPER') {
+            const keeperStoreId = req.storeNodeId;
+            const keeperId = req.userId;
+            scoped = requests.filter(r => {
+                const storeMatch = keeperStoreId && r.store_node_id === keeperStoreId;
+                const projectMatch = r.Project && r.Project.store_keeper_id === keeperId;
+                if (!storeMatch && !projectMatch) return false;
+
+                // Hide requests that have been fully acknowledged by PM:
+                // if all items are RECEIVED or COMPLETED, keeper doesn't need to see them anymore.
+                const items = r.RequestItems || [];
+                const hasOpenItems = items.some(ri => !['RECEIVED', 'COMPLETED'].includes(ri.status));
+                return hasOpenItems;
+            });
+        } else if (userRole === 'STORE_MANAGER') {
+            // Purchase/Store Manager: don't show MR (only PR/PR_STORE/TRANSFER_REQUEST etc.)
+            scoped = requests.filter(r => r.type !== 'MR');
+        }
+
+        res.send(scoped);
 
     } catch (err) {
         res.status(500).send({ message: err.message });
@@ -159,7 +232,7 @@ exports.updateStatus = async (req, res) => {
 exports.fulfillRequestItem = async (req, res) => {
     try {
         const { id } = req.params; // RequestItem ID
-        const { action } = req.body; // 'ISSUE' or 'PROCUREMENT'
+        const { action, invoice_number } = req.body; // action plus optional invoice_number for GRN
 
         const requestItem = await RequestItem.findByPk(id, { include: [Request, Item] });
         if (!requestItem) return res.status(404).send({ message: "Request Item not found" });
@@ -178,11 +251,12 @@ exports.fulfillRequestItem = async (req, res) => {
                 // For PR flow, keeper confirms receipt and issue in one action.
                 // This does NOT run on manager approval; it only runs when fulfill action is called.
                 if (requestItem.Request.type === 'PR' && requestItem.issued_quantity === 0) {
+                    const invoiceNumber = invoice_number || `RECV-${requestItem.Request.id.slice(0, 8)}`;
                     await inventoryService.processGRN(
                         storeNodeId,
                         requestItem.item_id,
                         qtyToIssue,
-                        `RECV-${requestItem.Request.id.slice(0, 8)}`,
+                        invoiceNumber,
                         req.userId
                     );
                 } else if (currentStock < qtyToIssue) {
@@ -251,11 +325,12 @@ exports.fulfillRequestItem = async (req, res) => {
             }
 
             // Process GRN (Adds stock)
+            const invoiceNumber = invoice_number || `RECV-${requestItem.Request.id.slice(0, 8)}`;
             await inventoryService.processGRN(
                 storeNodeId,
                 requestItem.item_id,
                 qtyToReceive,
-                `RECV-${requestItem.Request.id.slice(0, 8)}`,
+                invoiceNumber,
                 req.userId
             );
 
@@ -405,10 +480,19 @@ exports.createSiteByPM = async (req, res) => {
             return res.status(403).send({ message: "Only Project Managers can create sites." });
         }
 
-        const { name, code, address } = req.body;
+        const { name, code, address, project_id } = req.body;
 
         if (!name) {
             return res.status(400).send({ message: "Site name is required." });
+        }
+
+        let projectStoreNodeId = null;
+        if (project_id) {
+            const project = await db.Project.findByPk(project_id);
+            if (!project) {
+                return res.status(400).send({ message: "Selected project is invalid." });
+            }
+            projectStoreNodeId = project.store_node_id || null;
         }
 
         const site = await db.SiteLocation.create({
@@ -416,7 +500,8 @@ exports.createSiteByPM = async (req, res) => {
             code: code || null,
             address: address || null,
             created_by: req.userId,
-            store_node_id: null // Admin will later map this to the appropriate store
+            project_id: project_id || null,
+            store_node_id: projectStoreNodeId // If project is mapped, carry mapping. Else admin maps later.
         });
 
         res.status(201).json(site);

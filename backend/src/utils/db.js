@@ -23,6 +23,8 @@ db.InventoryTransaction = require('../models/InventoryTransaction')(sequelize);
 db.AuditLog = require('../models/AuditLog')(sequelize);
 db.PendingEdit = require('../models/PendingEdit')(sequelize);
 db.Project = require('../models/Project')(sequelize);
+db.ProjectStore = require('../models/ProjectStore')(sequelize);
+db.ProjectLocation = require('../models/ProjectLocation')(sequelize);
 db.StoreNode = require('../models/StoreNode')(sequelize);
 db.SiteLocation = require('../models/SiteLocation')(sequelize);
 db.Inventory = require('../models/Inventory')(sequelize);
@@ -44,6 +46,22 @@ db.RequestItem.belongsTo(db.Request, { foreignKey: 'request_id' });
 // Project - Request
 db.Project.hasMany(db.Request, { foreignKey: 'project_id' });
 db.Request.belongsTo(db.Project, { foreignKey: 'project_id' });
+
+// Project - Assignments (PM and Store Keeper)
+db.Project.belongsTo(db.User, { foreignKey: 'project_manager_id', as: 'project_manager' });
+db.Project.belongsTo(db.User, { foreignKey: 'store_keeper_id', as: 'store_keeper' });
+
+// StoreNode - Project (legacy mapping between project and store node)
+db.StoreNode.hasMany(db.Project, { foreignKey: 'store_node_id' });
+db.Project.belongsTo(db.StoreNode, { foreignKey: 'store_node_id', as: 'store_legacy' });
+
+// Project - ProjectStore (one store per project)
+db.Project.hasOne(db.ProjectStore, { foreignKey: 'project_id', as: 'project_store' });
+db.ProjectStore.belongsTo(db.Project, { foreignKey: 'project_id', as: 'project' });
+
+// Project - ProjectLocation (multiple locations per project)
+db.Project.hasMany(db.ProjectLocation, { foreignKey: 'project_id', as: 'locations' });
+db.ProjectLocation.belongsTo(db.Project, { foreignKey: 'project_id', as: 'project' });
 
 // Item - RequestItem
 db.Item.hasMany(db.RequestItem, { foreignKey: 'item_id' });
@@ -74,6 +92,10 @@ db.AuditLog.belongsTo(db.User, { foreignKey: 'performed_by', as: 'performer' });
 // StoreNode - SiteLocation (Admin assigns site to store)
 db.StoreNode.hasMany(db.SiteLocation, { foreignKey: 'store_node_id' });
 db.SiteLocation.belongsTo(db.StoreNode, { foreignKey: 'store_node_id', as: 'store' });
+
+// Project - SiteLocation (one project can have multiple sites)
+db.Project.hasMany(db.SiteLocation, { foreignKey: 'project_id', as: 'sites' });
+db.SiteLocation.belongsTo(db.Project, { foreignKey: 'project_id', as: 'project' });
 
 // User (PM) - SiteLocation
 db.User.hasMany(db.SiteLocation, { foreignKey: 'created_by' });

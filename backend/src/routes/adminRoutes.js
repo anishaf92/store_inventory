@@ -21,6 +21,8 @@ router.get('/sites', controller.getAllSites);
 router.post('/sites', controller.createSite);
 router.put('/sites/:id', controller.updateSite);
 router.delete('/sites/:id', controller.deleteSite);
+router.get('/projects', controller.getAllProjects);
+router.put('/projects/:id/store', controller.updateProjectStore);
 
 router.post('/system-reset', controller.systemReset);
 

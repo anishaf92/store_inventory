@@ -20,6 +20,7 @@ module.exports = (sequelize) => {
             type: DataTypes.UUID,
             allowNull: false,
         },
+        // Legacy store/site identifiers
         store_node_id: {
             type: DataTypes.UUID,
             allowNull: false,
@@ -29,6 +30,11 @@ module.exports = (sequelize) => {
             allowNull: true,
         },
         project_id: {
+            type: DataTypes.UUID,
+            allowNull: true,
+        },
+        // New project-centric location reference
+        project_location_id: {
             type: DataTypes.UUID,
             allowNull: true,
         },

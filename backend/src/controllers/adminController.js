@@ -1,5 +1,5 @@
 const db = require('../utils/db');
-const { User, StoreNode, SiteLocation } = db;
+const { User, StoreNode, SiteLocation, Project } = db;
 const bcrypt = require('bcryptjs');
 
 exports.getAllUsers = async (req, res) => {
@@ -32,6 +32,19 @@ exports.getAllSites = async (req, res) => {
             order: [['name', 'ASC']]
         });
         res.json(sites);
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+};
+
+exports.getAllProjects = async (req, res) => {
+    try {
+        const projects = await Project.findAll({
+            // Use legacy store alias to match association in db.js
+            include: [{ model: StoreNode, as: 'store_legacy', attributes: ['id', 'name', 'code'] }],
+            order: [['createdAt', 'DESC']]
+        });
+        res.json(projects);
     } catch (err) {
         res.status(500).json({ message: err.message });
     }
@@ -159,6 +172,33 @@ exports.deleteSite = async (req, res) => {
 
         await site.destroy();
         res.json({ message: "Site deleted successfully" });
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+};
+
+exports.updateProjectStore = async (req, res) => {
+    try {
+        const { id } = req.params; // project id
+        const { store_node_id } = req.body;
+
+        const project = await Project.findByPk(id);
+        if (!project) return res.status(404).json({ message: "Project not found" });
+
+        if (store_node_id) {
+            const store = await StoreNode.findByPk(store_node_id);
+            if (!store) return res.status(400).json({ message: "Store not found" });
+        }
+
+        await project.update({ store_node_id: store_node_id || null });
+
+        // Keep project sites tied to the same node-store mapping.
+        await SiteLocation.update(
+            { store_node_id: store_node_id || null },
+            { where: { project_id: id } }
+        );
+
+        res.json({ message: "Project store mapping updated", project });
     } catch (err) {
         res.status(500).json({ message: err.message });
     }
