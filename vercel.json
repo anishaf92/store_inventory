@@ -1,5 +1,5 @@
 {
-  "//": "Vercel configuration for deploying the React frontend (client) only.",
+  "//": "Vercel configuration for deploying the React frontend (client) only. Backend runs separately and is configured via VITE_API_BASE_URL.",
   "version": 2,
   "builds": [
     {
@@ -12,38 +12,11 @@
   ],
   "routes": [
     {
+      "handle": "filesystem"
+    },
+    {
       "src": "/(.*)",
-      "dest": "/client/dist/$1"
+      "dest": "/client/dist/index.html"
     }
   ]
-}
-
-{
-    "version": 2,
-    "builds": [
-        {
-            "src": "backend/src/app.js",
-            "use": "@vercel/node"
-        },
-        {
-            "src": "package.json",
-            "use": "@vercel/static-build",
-            "config": {
-                "distDir": "client/dist"
-            }
-        }
-    ],
-    "routes": [
-        {
-            "src": "/api/(.*)",
-            "dest": "/backend/src/app.js"
-        },
-        {
-            "handle": "filesystem"
-        },
-        {
-            "src": "/(.*)",
-            "dest": "/index.html"
-        }
-    ]
 }
